@@ -5,4 +5,3 @@ edition = "2024"
 description = "Ui library for dualys"
 repository = "https://github.com/dualys/wuu"
 license = "AGPL-3.0-or-later"
-[dependencies]
