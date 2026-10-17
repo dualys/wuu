@@ -38,7 +38,14 @@ impl Serve {
         }
 
         let header_height = 3;
-        Self::draw_container(0, 0, screen_cols, header_height, Some(" AMENTYS "), system_title);
+        Self::draw_container(
+            0,
+            0,
+            screen_cols,
+            header_height,
+            Some(" AMENTYS "),
+            system_title,
+        );
 
         if panels.is_empty() {
             return;
@@ -67,12 +74,8 @@ impl Serve {
             let x = col_idx * col_width;
             let y = body_y + (row_idx * panel_height);
 
-            let is_last_odd = (i == panels.len() - 1) && (panels.len() % 2 != 0);
-            let width = if is_last_odd {
-                screen_cols
-            } else {
-                col_width
-            };
+            let is_last_odd = (i == panels.len() - 1) && !panels.len().is_multiple_of(2);
+            let width = if is_last_odd { screen_cols } else { col_width };
 
             Self::render_styled_panel(x, y, width, panel_height, panel);
         }
@@ -116,7 +119,7 @@ impl Serve {
             let split_y = y + drop_height;
 
             // Show the command output and prompt in the drawer.
-            let term_View = if panel.term.output.is_empty() {
+            let term_view = if panel.term.output.is_empty() {
                 format_stack!("{} > {}_", panel.term.prompt, panel.term.input)
             } else {
                 format_stack!(
@@ -126,7 +129,7 @@ impl Serve {
                     panel.term.input
                 )
             };
-            Self::draw_text_in_rect(x, y, width, drop_height + 1, term_View.as_str());
+            Self::draw_text_in_rect(x, y, width, drop_height + 1, term_view.as_str());
 
             // Separate the terminal drawer from the panel content.
             Self::draw_horizontal_split(x, split_y, width);
@@ -276,19 +279,18 @@ impl Draw for Serve {
     ) {
         Self::draw_rect(x, y, width, height);
 
-        if let Some(t) = title {
-            if width > 4 {
-                let max_title_len = width - 4;
-                set_cursor_pos(x + 2, y);
-                for (i, ch) in t.chars().enumerate() {
-                    if i >= max_title_len {
-                        break;
-                    }
-                    print!("{}", ch);
+        if let Some(t) = title
+            && width > 4
+        {
+            let max_title_len = width - 4;
+            set_cursor_pos(x + 2, y);
+            for (i, ch) in t.chars().enumerate() {
+                if i >= max_title_len {
+                    break;
                 }
+                print!("{}", ch);
             }
         }
-
         Self::draw_text_in_rect(x, y, width, height, text);
     }
 }
