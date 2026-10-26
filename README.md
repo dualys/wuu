@@ -6,9 +6,10 @@ bars, interactive prompts, cursor controls, and a server dashboard renderer.
 Its UI data structures and formatting helpers avoid heap allocation; the
 terminal backend and your OS may have their own allocation requirements.
 
-The library does not own your input loop. Prompts are event-driven: the host
-application passes key events to `wuu`. Output helpers use a shared terminal
-that your OS initializes.
+The core library does not own your input loop. Prompts are event-driven: the
+host application passes key events to `wuu`. The optional `linux-keyboard`
+feature supplies a Linux raw-terminal reader; an OS can instead use the
+allocation-free ASCII/ANSI decoder or pass its own keyboard events.
 
 ## Runnable examples
 
@@ -16,7 +17,7 @@ Run the VCS output and prompt demonstrations with:
 
 ```sh
 cargo run --example vcs_output
-cargo run --example prompts
+cargo run --example prompts --features linux-keyboard
 ```
 
 The OS dashboard example creates a temporary in-memory framebuffer, renders a
@@ -29,7 +30,7 @@ cargo run --example os_dashboard
 In an OS, replace that temporary buffer with the framebuffer supplied by your
 bootloader or display driver, then keep the memory alive for as long as the
 terminal is using it. The examples are also checked by CI with
-`cargo check --examples --locked`.
+`cargo check --examples --all-features --locked`.
 
 ## Setup
 
@@ -147,6 +148,30 @@ Cell widths count Unicode scalar values; use single-column characters for
 predictable alignment. If there are more columns than can fit even at their
 minimum width, the table may exceed the requested width.
 
+Choose a border preset with `with_style()`:
+
+```rust
+use wuu::{Table, TableStyle};
+
+let headers = ["HASH", "MESSAGE"];
+let first = ["a1b2c3d", "Add rounded table styles"];
+let rows: [&[&str]; 1] = [&first];
+
+Table::new(&headers, &rows)
+    .with_style(TableStyle::Rounded)
+    .print_auto();
+```
+
+Available presets are `Ascii` (the default), `Modern`, `Rounded`, `Double`,
+and `Transparent`. Transparent tables have no side borders and use a single
+rule under the header:
+
+```text
+HASH     MESSAGE
+───────  ────────────────────────
+a1b2c3d  Add rounded table styles
+```
+
 ## Diffs
 
 `Diff` renders unified-diff text. Added lines are green, removed lines red,
@@ -201,7 +226,29 @@ Fetching [============] 100%
 
 Prompts are event-driven. Convert keys from your OS or application event loop
 to `PromptKey`, call `handle_key()`, then redraw with `print()` or `write_to()`.
-`Escape` cancels any prompt.
+`Escape` cancels any prompt. On Linux, enable the `linux-keyboard` feature and
+use `keyboard::linux::LinuxKeyboard` to read actual key presses in raw mode.
+
+`PromptKey::from_ascii()` maps one ASCII byte using `ASCII_KEY_TABLE`.
+`AsciiKeyDecoder` also consumes ANSI arrow sequences incrementally, which is
+useful for serial terminals or an OS keyboard driver that translates keys into
+ASCII bytes. Call `flush_escape()` after the OS's Escape timeout to distinguish
+an Escape press from the prefix of an ANSI sequence. Alternatively,
+`PromptKey::from_ansi()` recognizes complete strings and `Prompt::handle_ansi()`
+dispatches one such string.
+
+Try the selectable branch example with:
+
+```sh
+cargo run --example prompts --features linux-keyboard
+```
+
+It uses raw key input: move with the arrow keys, select with Enter, or cancel
+with Escape. The blinking terminal cursor is hidden while the prompt is active
+and restored afterward; the `>` selection marker remains visible. The Linux
+adapter restores the terminal mode when it is dropped.
+An OS can pass `PromptKey::Up`, `PromptKey::Down`, and other events directly;
+it does not need to enable the Linux feature.
 
 ### Text input
 

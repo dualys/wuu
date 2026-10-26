@@ -1,4 +1,4 @@
-#![cfg_attr(not(test), no_std)]
+#![cfg_attr(not(any(test, feature = "linux-keyboard")), no_std)]
 
 mod drawing;
 mod framebuffer;
@@ -9,6 +9,7 @@ pub mod style;
 
 pub mod cursor;
 pub mod diff;
+pub mod keyboard;
 pub mod message;
 pub mod prompt;
 pub mod serve;
@@ -21,6 +22,7 @@ pub use drawing::{
 };
 pub use framebuffer::ScreenData;
 pub use framebuffer::TERMINAL;
+pub use keyboard::{ASCII_KEY_TABLE, AsciiKeyDecoder};
 pub use message::{
     MessageLevel, print_message, print_styled_message, write_message, write_styled_message,
 };
@@ -30,7 +32,7 @@ pub use progress::ProgressBar;
 pub use prompt::{Prompt, PromptError, PromptKey, PromptResult, PromptState, TEXT_CAPACITY};
 pub use stack_string::StackString;
 pub use style::{Color, ColorMode};
-pub use table::Table;
+pub use table::{Table, TableStyle};
 
 /// High-level interface for clearing a display and rendering dashboards.
 pub struct Wuu {

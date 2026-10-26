@@ -1,56 +1,75 @@
-use wuu::{Noun, Prompt, PromptKey, PromptResult};
+use std::io::{self, Write};
+use std::time::Duration;
 
-fn main() {
-    let mut text = Prompt::text("Commit message");
-    for ch in "Fix the status output".chars() {
-        text.handle_key(PromptKey::Character(ch));
-    }
-    text.handle_key(PromptKey::Enter);
-    if let Some(PromptResult::Text(message)) = text.result() {
-        println!("Commit message: {message}");
-    }
+use crossterm::cursor::{Hide, Show};
+use crossterm::execute;
+use wuu::{Prompt, PromptResult, PromptState, keyboard::linux::LinuxKeyboard};
 
-    let branches = ["main", "release", "feature"];
-    let mut branch = Prompt::select("Switch to branch", &branches).unwrap();
-    branch.handle_key(PromptKey::Down);
-    branch.handle_key(PromptKey::Enter);
-    if let Some(PromptResult::Selected(index)) = branch.result() {
-        println!("Selected branch: {}", branches[index]);
+struct RestoreCursor {
+    active: bool,
+}
+
+impl RestoreCursor {
+    fn hide(stdout: &mut impl Write) -> io::Result<Self> {
+        execute!(stdout, Hide)?;
+        Ok(Self { active: true })
     }
 
-    let actions = ["stage", "commit", "push"];
-    let mut selected = [false; 3];
-    {
-        let mut action_prompt =
-            Prompt::multi_select("Choose actions", &actions, &mut selected).unwrap();
-        action_prompt.handle_key(PromptKey::Toggle);
-        action_prompt.handle_key(PromptKey::Down);
-        action_prompt.handle_key(PromptKey::Toggle);
-        action_prompt.handle_key(PromptKey::Enter);
-        if let Some(PromptResult::Multiple(choices)) = action_prompt.result() {
-            println!("Selected actions: {choices:?}");
+    fn restore(&mut self) -> io::Result<()> {
+        if self.active {
+            execute!(io::stdout(), Show)?;
+            self.active = false;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for RestoreCursor {
+    fn drop(&mut self) {
+        if self.active {
+            let _ = execute!(io::stdout(), Show);
         }
     }
-    println!("Selection storage: {selected:?}");
+}
 
-    let mut confirm = Prompt::confirm("Push the commit?");
-    confirm.handle_key(PromptKey::Character('y'));
-    confirm.handle_key(PromptKey::Enter);
-    if let Some(PromptResult::Confirm(yes)) = confirm.result() {
-        println!("Push confirmed: {yes}");
-    }
-
-    let objects = [Noun::of(b"first file"), Noun::of(b"second file")];
-    let mut noun_prompt = Prompt::noun_select("Choose object", &objects)
-        .unwrap()
-        .noun_prefix_len(6);
-    noun_prompt.handle_key(PromptKey::Down);
-    noun_prompt.handle_key(PromptKey::Enter);
-    if let Some(PromptResult::Noun(noun)) = noun_prompt.result() {
-        println!("Selected noun: {noun:?}");
-    }
+fn main() -> io::Result<()> {
+    let branches = ["main", "release", "feature"];
+    let mut prompt =
+        Prompt::select("Switch to branch", &branches).expect("the example has branch choices");
+    let mut keyboard = LinuxKeyboard::new()?;
+    let mut stdout = io::stdout().lock();
+    let mut cursor = RestoreCursor::hide(&mut stdout)?;
 
     let mut rendered = String::new();
-    noun_prompt.write_to(&mut rendered).unwrap();
-    println!("Prompt rendering:\n{rendered}");
+    prompt
+        .write_to(&mut rendered)
+        .expect("writing to String cannot fail");
+    stdout.write_all(rendered.as_bytes())?;
+    stdout.flush()?;
+
+    while prompt.state() == PromptState::Pending {
+        if let Some(key) = keyboard.read_key(Duration::from_millis(100))? {
+            prompt.handle_key(key);
+            rendered.clear();
+            prompt
+                .write_to(&mut rendered)
+                .expect("writing to String cannot fail");
+            stdout.write_all(rendered.as_bytes())?;
+            stdout.flush()?;
+        }
+    }
+
+    keyboard.restore()?;
+    cursor.restore()?;
+    writeln!(stdout)?;
+
+    match prompt.result() {
+        Some(PromptResult::Selected(index)) => {
+            writeln!(stdout, "Selected branch: {}", branches[index])?;
+        }
+        None => writeln!(stdout, "Selection cancelled.")?,
+        _ => unreachable!("select prompts return an option index"),
+    }
+
+    Ok(())
 }

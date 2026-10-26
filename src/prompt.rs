@@ -7,7 +7,7 @@ use noun::Noun;
 pub const TEXT_CAPACITY: usize = 256;
 
 /// Input event passed to a prompt by its host application.
-#[derive(Copy, Clone, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum PromptKey {
     /// A printable character.
     Character(char),
@@ -23,6 +23,41 @@ pub enum PromptKey {
     Enter,
     /// Cancel the prompt.
     Escape,
+}
+
+impl PromptKey {
+    /// Maps a single byte through the standard ASCII prompt-key table.
+    #[must_use]
+    pub fn from_ascii(byte: u8) -> Option<Self> {
+        crate::keyboard::ASCII_KEY_TABLE
+            .get(usize::from(byte))
+            .copied()
+            .flatten()
+    }
+
+    /// Converts a terminal input string to a prompt key.
+    ///
+    /// Supports common ANSI arrow sequences, Enter, Escape, Backspace, and
+    /// single printable Unicode characters.
+    #[must_use]
+    pub fn from_ansi(input: &str) -> Option<Self> {
+        match input {
+            "\x1b[A" | "\x1bOA" => Some(Self::Up),
+            "\x1b[B" | "\x1bOB" => Some(Self::Down),
+            "\r" | "\n" => Some(Self::Enter),
+            "\x1b" => Some(Self::Escape),
+            "\x7f" | "\x08" => Some(Self::Backspace),
+            _ => {
+                let mut chars = input.chars();
+                let ch = chars.next()?;
+                if chars.next().is_none() && !ch.is_control() {
+                    Some(Self::Character(ch))
+                } else {
+                    None
+                }
+            }
+        }
+    }
 }
 
 /// Current lifecycle state of a prompt.
@@ -196,6 +231,17 @@ impl<'a> Prompt<'a> {
         }
     }
 
+    /// Converts and handles one terminal input string.
+    ///
+    /// Returns `true` when the input was recognized as a key.
+    pub fn handle_ansi(&mut self, input: &str) -> bool {
+        let Some(key) = PromptKey::from_ansi(input) else {
+            return false;
+        };
+        self.handle_key(key);
+        true
+    }
+
     /// Returns the prompt lifecycle state.
     #[must_use]
     pub const fn state(&self) -> PromptState {
@@ -305,17 +351,17 @@ impl<'a> Prompt<'a> {
                 output
                     .write_str(core::str::from_utf8(&self.text[..self.text_len]).unwrap_or(""))?;
                 output.write_char('_')?;
-                output.write_char('\n')?;
+                output.write_str("\r\n")?;
                 Ok(1)
             }
             PromptKind::Confirm => {
                 output.write_str(" [y/N] ")?;
                 output.write_str(if self.cursor == 1 { "yes" } else { "no" })?;
-                output.write_char('\n')?;
+                output.write_str("\r\n")?;
                 Ok(1)
             }
             PromptKind::Select(options) | PromptKind::MultiSelect(options) => {
-                output.write_char('\n')?;
+                output.write_str("\r\n")?;
                 for (index, option) in options.iter().enumerate() {
                     output.write_str(if index == self.cursor { "> " } else { "  " })?;
                     if matches!(self.kind, PromptKind::MultiSelect(_)) {
@@ -328,7 +374,7 @@ impl<'a> Prompt<'a> {
                         output.write_str(if checked { "[x] " } else { "[ ] " })?;
                     }
                     output.write_str(option)?;
-                    output.write_char('\n')?;
+                    output.write_str("\r\n")?;
                 }
                 Ok(options.len() + 1)
             }
@@ -337,7 +383,7 @@ impl<'a> Prompt<'a> {
                 for (index, noun) in nouns.iter().enumerate() {
                     output.write_str(if index == self.cursor { "> " } else { "  " })?;
                     write_noun_prefix(output, noun, self.noun_prefix_len)?;
-                    output.write_char('\n')?;
+                    output.write_str("\r\n")?;
                 }
                 Ok(nouns.len() + 1)
             }
@@ -441,5 +487,36 @@ mod tests {
         assert_eq!(redraw.matches("\x1b[2K").count(), 3);
         assert!(redraw.starts_with("\x1b[3A\r"));
         assert!(redraw.contains("> feature"));
+    }
+
+    #[test]
+    fn prompt_rows_use_carriage_return_and_line_feed() {
+        let options = ["main", "release", "feature"];
+        let prompt = Prompt::select("Branch", &options).unwrap();
+        let mut output = String::new();
+
+        prompt.write_to(&mut output).unwrap();
+
+        assert_eq!(output.matches("\r\n").count(), 4);
+        assert_eq!(output.replace("\r\n", "").matches('\n').count(), 0);
+    }
+
+    #[test]
+    fn ansi_input_moves_and_accepts_selection() {
+        let options = ["main", "release"];
+        let mut prompt = Prompt::select("Branch", &options).unwrap();
+
+        assert!(prompt.handle_ansi("\x1b[B"));
+        assert!(prompt.handle_ansi("\r"));
+
+        assert!(matches!(prompt.result(), Some(PromptResult::Selected(1))));
+    }
+
+    #[test]
+    fn ansi_input_maps_backspace_and_escape() {
+        assert_eq!(PromptKey::from_ansi("\x7f"), Some(PromptKey::Backspace));
+        assert_eq!(PromptKey::from_ansi("\x1b"), Some(PromptKey::Escape));
+        assert_eq!(PromptKey::from_ansi("\x1b[3~"), None);
+        assert_eq!(PromptKey::from_ansi("abc"), None);
     }
 }

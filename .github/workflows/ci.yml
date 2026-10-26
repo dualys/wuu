@@ -25,16 +25,16 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Run tests
-        run: cargo test --locked
+        run: cargo test --all-features --locked
 
       - name: Run Clippy
-        run: cargo clippy --all-targets --locked -- -D warnings
+        run: cargo clippy --all-targets --all-features --locked -- -D warnings
 
       - name: Check no_std library build
         run: cargo check --lib --locked
 
       - name: Check examples
-        run: cargo check --examples --locked
+        run: cargo check --examples --all-features --locked
 
       - name: Verify package
         run: cargo publish --dry-run --locked
