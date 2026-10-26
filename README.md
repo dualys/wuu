@@ -1,5 +1,7 @@
 # wuu
 
+[![CI](https://github.com/dualys/wuu/actions/workflows/ci.yml/badge.svg)](https://github.com/dualys/wuu/actions/workflows/ci.yml)
+
 `wuu` is a `no_std` terminal UI library for operating systems and VCS tools. It
 provides formatted terminal output, status messages, tables, diffs, progress
 bars, interactive prompts, cursor controls, and a server dashboard renderer.
