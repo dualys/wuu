@@ -121,3 +121,37 @@ pub fn clear_screen() {
     crate::print!("\x1b[2J");
     home();
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        get_cursor_pos, hide_cursor, is_cursor_visible, move_cursor_by, restore_cursor_pos,
+        save_cursor_pos, set_cursor_pos, show_cursor, with_hidden_cursor,
+    };
+
+    #[test]
+    fn cursor_movement_and_hidden_guard_restore_state() {
+        show_cursor();
+        set_cursor_pos(3, 5);
+        save_cursor_pos();
+
+        move_cursor_by(-4, -8);
+        assert_eq!(get_cursor_pos(), (0, 0));
+        move_cursor_by(2, 3);
+        assert_eq!(get_cursor_pos(), (2, 3));
+        restore_cursor_pos();
+        assert_eq!(get_cursor_pos(), (3, 5));
+
+        with_hidden_cursor(|| {
+            assert!(!is_cursor_visible());
+            set_cursor_pos(20, 20);
+        });
+        assert!(is_cursor_visible());
+        assert_eq!(get_cursor_pos(), (3, 5));
+
+        hide_cursor();
+        with_hidden_cursor(|| assert!(!is_cursor_visible()));
+        assert!(!is_cursor_visible());
+        show_cursor();
+    }
+}

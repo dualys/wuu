@@ -57,3 +57,39 @@ macro_rules! format_stack {
         s
     }};
 }
+
+#[cfg(test)]
+mod tests {
+    use super::StackString;
+    use core::fmt::Write;
+
+    #[test]
+    fn stores_text_up_to_capacity() {
+        let mut value = StackString::<5>::new();
+        write!(&mut value, "abcdef").unwrap();
+
+        assert_eq!(value.as_str(), "abcde");
+    }
+
+    #[test]
+    fn reports_empty_when_truncation_splits_utf8() {
+        let mut value = StackString::<1>::new();
+        write!(&mut value, "é").unwrap();
+
+        assert_eq!(value.as_str(), "");
+    }
+
+    #[test]
+    fn default_creates_an_empty_buffer() {
+        let value = StackString::<4>::default();
+
+        assert_eq!(value.as_str(), "");
+    }
+
+    #[test]
+    fn format_macro_formats_into_the_fixed_buffer() {
+        let value = crate::format_stack!("branch={} status={}", "main", "clean");
+
+        assert_eq!(value.as_str(), "branch=main status=clean");
+    }
+}

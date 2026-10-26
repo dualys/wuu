@@ -105,3 +105,44 @@ impl<'a> Panel<'a> {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{DropDownTerm, Panel, Status};
+
+    #[test]
+    fn terminal_starts_closed_and_toggle_changes_state() {
+        let mut terminal = DropDownTerm::new("src");
+
+        assert!(!terminal.is_open);
+        assert_eq!(terminal.prompt, "src");
+        assert_eq!(terminal.output, "");
+        assert_eq!(terminal.input, "");
+
+        terminal.toggle();
+        assert!(terminal.is_open);
+        terminal.toggle();
+        assert!(!terminal.is_open);
+    }
+
+    #[test]
+    fn open_terminal_preserves_output_and_input() {
+        let terminal = DropDownTerm::open_with("repo", "ready", "status");
+
+        assert!(terminal.is_open);
+        assert_eq!(terminal.prompt, "repo");
+        assert_eq!(terminal.output, "ready");
+        assert_eq!(terminal.input, "status");
+    }
+
+    #[test]
+    fn panel_constructor_preserves_all_fields() {
+        let terminal = DropDownTerm::new("repo");
+        let panel = Panel::new("Git", "clean", Status::Focused, terminal);
+
+        assert_eq!(panel.title, "Git");
+        assert_eq!(panel.content, "clean");
+        assert!(matches!(panel.status, Status::Focused));
+        assert!(!panel.term.is_open);
+    }
+}

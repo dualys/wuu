@@ -73,7 +73,8 @@ pub fn print_styled_message(level: MessageLevel, message: &str, mode: ColorMode)
 
 /// Writes an OpenRC-style successful status line.
 ///
-/// `width` is the desired total line width in terminal columns.
+/// `width` is the desired total line width in characters. Use single-column
+/// text for descriptions and statuses to align reliably in terminals.
 pub fn write_ok<W: Write>(
     output: &mut W,
     description: &str,
@@ -85,7 +86,8 @@ pub fn write_ok<W: Write>(
 
 /// Writes an OpenRC-style failed status line.
 ///
-/// `width` is the desired total line width in terminal columns.
+/// `width` is the desired total line width in characters. Use single-column
+/// text for descriptions and statuses to align reliably in terminals.
 pub fn write_ko<W: Write>(
     output: &mut W,
     description: &str,
@@ -97,7 +99,8 @@ pub fn write_ko<W: Write>(
 
 /// Writes an OpenRC-style successful status line with custom status text.
 ///
-/// `width` is the desired total line width in terminal columns.
+/// `width` is the desired total line width in characters. Use single-column
+/// text for descriptions and statuses to align reliably in terminals.
 pub fn write_ok_custom<W: Write>(
     output: &mut W,
     description: &str,
@@ -110,7 +113,8 @@ pub fn write_ok_custom<W: Write>(
 
 /// Writes an OpenRC-style failed status line with custom status text.
 ///
-/// `width` is the desired total line width in terminal columns.
+/// `width` is the desired total line width in characters. Use single-column
+/// text for descriptions and statuses to align reliably in terminals.
 pub fn write_ko_custom<W: Write>(
     output: &mut W,
     description: &str,
@@ -306,5 +310,33 @@ mod tests {
         let mut output = String::new();
         write_ok(&mut output, "A very long description", 8, ColorMode::Plain).unwrap();
         assert_eq!(output, "* A very long description  [ ok ]\n");
+    }
+
+    #[test]
+    fn custom_status_supports_empty_text_and_minimum_width() {
+        let mut output = String::new();
+        write_ok_custom(&mut output, "Ready", "", 0, ColorMode::Plain).unwrap();
+        assert_eq!(output, "* Ready  [  ]\n");
+    }
+
+    #[test]
+    fn ansi_status_colors_match_the_result_and_reset() {
+        let mut output = String::new();
+        write_ok_custom(&mut output, "Service", "ready", 27, ColorMode::Ansi).unwrap();
+        write_ko_custom(&mut output, "Network", "offline", 27, ColorMode::Ansi).unwrap();
+
+        assert_eq!(
+            output,
+            "\x1b[32m*\x1b[0m Service ....... [ \x1b[32mready\x1b[0m ]\n\
+\x1b[31m!\x1b[0m Network ..... [ \x1b[31moffline\x1b[0m ]\n"
+        );
+    }
+
+    #[test]
+    fn status_line_matches_requested_width_for_single_column_text() {
+        let mut output = String::new();
+        write_ko_custom(&mut output, "Network", "offline", 30, ColorMode::Plain).unwrap();
+
+        assert_eq!(output.lines().next().unwrap().chars().count(), 30);
     }
 }
