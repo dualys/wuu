@@ -33,5 +33,8 @@ jobs:
       - name: Check no_std library build
         run: cargo check --lib --locked
 
+      - name: Check examples
+        run: cargo check --examples --locked
+
       - name: Verify package
         run: cargo publish --dry-run --locked

@@ -10,6 +10,27 @@ The library does not own your input loop. Prompts are event-driven: the host
 application passes key events to `wuu`. Output helpers use a shared terminal
 that your OS initializes.
 
+## Runnable examples
+
+Run the VCS output and prompt demonstrations with:
+
+```sh
+cargo run --example vcs_output
+cargo run --example prompts
+```
+
+The OS dashboard example creates a temporary in-memory framebuffer, renders a
+dashboard into it, and reports how many bytes changed:
+
+```sh
+cargo run --example os_dashboard
+```
+
+In an OS, replace that temporary buffer with the framebuffer supplied by your
+bootloader or display driver, then keep the memory alive for as long as the
+terminal is using it. The examples are also checked by CI with
+`cargo check --examples --locked`.
+
 ## Setup
 
 Add `wuu` to your dependencies:
