@@ -1,4 +1,4 @@
-use core::fmt::{self, Write};
+use core::fmt::{self, Arguments, Write};
 
 use crate::style::{Color, ColorMode, write_colored};
 
@@ -71,9 +71,77 @@ pub fn print_styled_message(level: MessageLevel, message: &str, mode: ColorMode)
     }
 }
 
+/// Prints a formatted, ANSI-colored message without allocating.
+///
+/// This function is intended for the exported level macros.
+#[doc(hidden)]
+pub fn print_formatted_message(level: MessageLevel, args: Arguments<'_>) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let _ = write_formatted_message(term, level, args);
+    }
+}
+
+fn write_formatted_message<W: Write>(
+    output: &mut W,
+    level: MessageLevel,
+    args: Arguments<'_>,
+) -> fmt::Result {
+    output.write_char('[')?;
+    write_colored(output, level.label(), level.color(), ColorMode::Ansi)?;
+    output.write_str("] ")?;
+    output.write_fmt(args)?;
+    output.write_char('\n')
+}
+
+/// Prints an informational message to the configured terminal.
+///
+/// Formatting follows [`core::format_args!`]; no heap allocation is needed.
+#[macro_export]
+macro_rules! info {
+    ($($arg:tt)*) => {
+        $crate::message::print_formatted_message(
+            $crate::MessageLevel::Info,
+            core::format_args!($($arg)*),
+        )
+    };
+}
+
+/// Prints a success message to the configured terminal.
+#[macro_export]
+macro_rules! success {
+    ($($arg:tt)*) => {
+        $crate::message::print_formatted_message(
+            $crate::MessageLevel::Success,
+            core::format_args!($($arg)*),
+        )
+    };
+}
+
+/// Prints a warning message to the configured terminal.
+#[macro_export]
+macro_rules! warning {
+    ($($arg:tt)*) => {
+        $crate::message::print_formatted_message(
+            $crate::MessageLevel::Warning,
+            core::format_args!($($arg)*),
+        )
+    };
+}
+
+/// Prints an error message to the configured terminal.
+#[macro_export]
+macro_rules! error {
+    ($($arg:tt)*) => {
+        $crate::message::print_formatted_message(
+            $crate::MessageLevel::Error,
+            core::format_args!($($arg)*),
+        )
+    };
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{MessageLevel, write_message, write_styled_message};
+    use super::{MessageLevel, write_formatted_message, write_message, write_styled_message};
     use crate::style::ColorMode;
 
     #[test]
@@ -94,5 +162,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, "[ERROR] Checkout failed\n");
+    }
+
+    #[test]
+    fn formats_level_message_without_allocation() {
+        let mut output = String::new();
+        write_formatted_message(
+            &mut output,
+            MessageLevel::Success,
+            format_args!("Created commit {}", "abc123"),
+        )
+        .unwrap();
+        assert_eq!(output, "[\x1b[32mSUCCESS\x1b[0m] Created commit abc123\n");
     }
 }

@@ -2,9 +2,12 @@
 name = "wuu"
 version = "0.1.1"
 edition = "2024"
-description = "Ui library for dualys"
+rust-version = "1.88"
+description = "Allocation-free terminal UI helpers for no_std operating systems and VCS tools"
 repository = "https://github.com/dualys/wuu"
 license = "AGPL-3.0-or-later"
+keywords = ["no-std", "terminal", "vcs", "operating-system", "tui"]
+categories = ["no-std", "command-line-utilities", "development-tools"]
 
 [dependencies]
 spin = { version = "0.12.3", default-features = false, features = [

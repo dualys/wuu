@@ -1,88 +1,136 @@
 # wuu
 
-`wuu` provides allocation-free terminal UI helpers for VCS-style applications:
-status messages, tables, diffs, progress bars, and event-driven prompts. The
-library is `no_std`; it does not read stdin or own your application's input
-loop.
+`wuu` is a `no_std` terminal UI library for operating systems and VCS tools. It
+provides formatted terminal output, status messages, tables, diffs, progress
+bars, interactive prompts, cursor controls, and a server dashboard renderer.
+Its UI data structures and formatting helpers avoid heap allocation; the
+terminal backend and your OS may have their own allocation requirements.
 
-## Terminal output
+The library does not own your input loop. Prompts are event-driven: the host
+application passes key events to `wuu`. Output helpers use a shared terminal
+that your OS initializes.
 
-The print helpers write to the shared `TERMINAL`. Configure it with your
-terminal/framebuffer before calling `print`, `finish`, or another print helper.
-If you don't have a terminal configured yet, use the `write_to` functions to
-render into any `core::fmt::Write` destination.
+## Setup
 
-## Status messages
+Add `wuu` to your dependencies:
 
-Use message levels for short feedback after VCS operations:
-
-```rust
-use wuu::{ColorMode, MessageLevel, print_styled_message};
-
-print_styled_message(
-    MessageLevel::Success,
-    "Commit created",
-    ColorMode::Ansi,
-);
-print_styled_message(
-    MessageLevel::Warning,
-    "Working tree has unstaged changes",
-    ColorMode::Plain,
-);
+```toml
+[dependencies]
+wuu = "0.1"
 ```
 
-Available levels are `Info`, `Success`, `Warning`, and `Error`. Choose
-`ColorMode::Plain` when ANSI colors are unsupported. To format a message
-without using the global terminal:
+`wuu` can be used from a `no_std` crate. Initialize
+[`TERMINAL`](src/framebuffer.rs) with your OS's `os-terminal` instance before
+calling terminal print helpers. For code that does not have a configured
+terminal, the `write_to` APIs render to any `core::fmt::Write` destination.
+
+## Formatted output and macros
+
+The `print!` and `println!` macros write formatted text to the configured
+terminal. The `info!`, `success!`, `warning!`, and `error!` macros add a
+severity label and ANSI color without allocating:
 
 ```rust
-use wuu::{MessageLevel, write_message};
+wuu::println!("wuu VCS starting");
+wuu::info!("Scanning {} files", 12);
+wuu::success!("Commit {} created", "a1b2c3d");
+wuu::warning!("{} files are unstaged", 2);
+wuu::error!("Could not open {}", "config.wuu");
+```
 
-let mut output = String::new();
-write_message(&mut output, MessageLevel::Info, "Scanning working tree").unwrap();
-assert_eq!(output, "[INFO] Scanning working tree\n");
+The output looks like this (the severity labels are colored on an ANSI
+terminal):
+
+```text
+wuu VCS starting
+[INFO] Scanning 12 files
+[SUCCESS] Commit a1b2c3d created
+[WARNING] 2 files are unstaged
+[ERROR] Could not open config.wuu
+```
+
+[`format_stack!`](src/stack_string.rs) formats into a fixed 256-byte buffer:
+
+```rust
+let line = wuu::format_stack!("branch: {} ({})", "main", "clean");
+wuu::println!("{}", line.as_str());
+```
+
+The buffer truncates at its byte capacity. If truncation splits a UTF-8
+character, `as_str()` returns an empty string.
+
+For more control, write to another formatter or choose whether to emit ANSI
+colors:
+
+```rust
+use wuu::{ColorMode, MessageLevel, print_styled_message, write_message};
+
+let mut text = String::new();
+write_message(&mut text, MessageLevel::Info, "Working tree clean").unwrap();
+assert_eq!(text, "[INFO] Working tree clean\n");
+
+print_styled_message(MessageLevel::Success, "Commit created", ColorMode::Ansi);
+print_styled_message(MessageLevel::Warning, "No remote configured", ColorMode::Plain);
 ```
 
 ## Tables
 
-Tables borrow their headers and rows, so building one does not require `wuu` to
-allocate. Use `print_auto` to fit the configured terminal width:
+Tables borrow their headers and rows. `print_auto()` uses the configured
+terminal width; `print_width()` and `write_to_width()` accept a width directly:
 
 ```rust
 use wuu::Table;
 
 let headers = ["CHANGE", "STATUS", "PATH"];
+let staged = ["A", "added", "src/commit.rs"];
 let modified = ["M", "modified", "src/lib.rs"];
-let untracked = ["?", "untracked", "README.md"];
-let rows: [&[&str]; 2] = [&modified, &untracked];
+let rows: [&[&str]; 2] = [&staged, &modified];
 
 Table::new(&headers, &rows).print_auto();
 ```
 
-For a caller-supplied width or a custom output destination:
+Example:
 
-```rust
-use wuu::Table;
-
-let headers = ["STATUS", "PATH"];
-let changed = ["modified", "src/very/long/path/to/file.rs"];
-let rows: [&[&str]; 1] = [&changed];
-let table = Table::new(&headers, &rows);
-
-let mut output = String::new();
-table.write_to_width(&mut output, 32).unwrap();
-assert!(output.lines().all(|line| line.chars().count() <= 32));
+```text
++--------+----------+---------------+
+| CHANGE | STATUS   | PATH          |
++--------+----------+---------------+
+| A      | added    | src/commit.rs |
+| M      | modified | src/lib.rs    |
++--------+----------+---------------+
 ```
 
-Long paths are shortened from the left to retain their ending; other cells are
-shortened from the right. `write_to` and `print` use the natural table width.
-Cell widths count Unicode scalar values, so use single-column characters for
-predictable alignment.
+Long paths are shortened from the left to preserve their ending, while other
+cells are shortened from the right:
+
+```rust
+let headers = ["STATUS", "PATH"];
+let row = ["modified", "src/very/long/path/to/file.rs"];
+let rows: [&[&str]; 1] = [&row];
+let table = Table::new(&headers, &rows);
+table.print_width(30);
+```
+
+An abbreviated result:
+
+```text
++----------+-----------------+
+| STATUS   | PATH            |
++----------+-----------------+
+| modified | ~/th/to/file.rs |
++----------+-----------------+
+```
+
+For custom output, call `write_to()` or `write_to_width(&mut output, width)`.
+Cell widths count Unicode scalar values; use single-column characters for
+predictable alignment. If there are more columns than can fit even at their
+minimum width, the table may exceed the requested width.
 
 ## Diffs
 
-`Diff` accepts unified-diff text and colors added, removed, and hunk-header
-lines. File headers (`+++` and `---`) are left uncolored:
+`Diff` renders unified-diff text. Added lines are green, removed lines red,
+and hunk headers cyan in ANSI mode. File headers (`+++` and `---`) remain
+uncolored:
 
 ```rust
 use wuu::{ColorMode, Diff};
@@ -97,81 +145,81 @@ let patch = "\
 Diff::new(patch).print(ColorMode::Ansi);
 ```
 
-Use `ColorMode::Plain` for terminals without ANSI support, or call
-`Diff::write_to(&mut output, mode)` to render elsewhere.
+Call `write_to(&mut output, ColorMode::Plain)` for plain output or to render to
+a custom `core::fmt::Write` destination.
 
 ## Progress bars
 
-Update a bar as work completes, then call `finish` to end its line:
+Use `set_position()` when a task reports completed units, or `inc()` when each
+iteration completes one unit:
 
 ```rust
 use wuu::ProgressBar;
 
-let files_to_fetch = 100;
-let mut progress = ProgressBar::with_message(files_to_fetch, "Fetching");
-progress.set_width(30);
+let mut progress = ProgressBar::with_message(3, "Fetching");
+progress.set_width(12);
 
-for completed_files in 1..=files_to_fetch {
-    // Fetch one file here.
-    progress.set_position(completed_files);
+for completed in 1..=3 {
+    // Fetch one object.
+    progress.set_position(completed);
     progress.print();
 }
 progress.finish();
 ```
 
-Alternatively, use `inc()` after each item. The position is clamped to the
-total; a total of zero is displayed as complete. `write_to` and `write_finish`
-render to any `core::fmt::Write` destination.
+The final display is:
+
+```text
+Fetching [============] 100%
+```
+
+`write_to()` and `write_finish()` render to a custom formatter.
+`set_position()` clamps to the total; a total of zero is considered complete.
 
 ## Interactive prompts
 
-Prompts are event-driven. Your application translates keyboard events into
-`PromptKey`, passes them to `handle_key`, then calls `print` to redraw. `wuu`
-does not read stdin or decide how platform-specific key events are collected.
+Prompts are event-driven. Convert keys from your OS or application event loop
+to `PromptKey`, call `handle_key()`, then redraw with `print()` or `write_to()`.
+`Escape` cancels any prompt.
 
-### Text entry
+### Text input
 
 ```rust
 use wuu::{Prompt, PromptKey, PromptResult};
 
 let mut prompt = Prompt::text("Commit message");
-prompt.print();
-
-// In your input loop, translate received keys and redraw:
 prompt.handle_key(PromptKey::Character('F'));
 prompt.handle_key(PromptKey::Character('i'));
 prompt.handle_key(PromptKey::Character('x'));
 prompt.handle_key(PromptKey::Enter);
-prompt.print();
 
 if let Some(PromptResult::Text(message)) = prompt.result() {
-    // Pass `message` to the commit operation.
+    // Store the commit message.
+    assert_eq!(message, "Fix");
 }
 ```
 
-Text input stores up to `TEXT_CAPACITY` bytes (256); backspace removes one
+Text input holds up to `TEXT_CAPACITY` (256) bytes. `Backspace` removes one
 Unicode character.
 
 ### Confirmation
 
-Confirmations default to no. `Toggle`, `y`/`Y`, or `n`/`N` changes the answer;
-`Enter` accepts it and `Escape` cancels:
+Confirmations default to no. Toggle the answer with `Toggle` or enter `y`/`n`,
+then accept with `Enter`:
 
 ```rust
 use wuu::{Prompt, PromptKey, PromptResult};
 
-let mut prompt = Prompt::confirm("Delete this branch?");
+let mut prompt = Prompt::confirm("Delete branch 'old'?");
 prompt.handle_key(PromptKey::Character('y'));
 prompt.handle_key(PromptKey::Enter);
 
-if let Some(PromptResult::Confirm(confirmed)) = prompt.result() {
-    if confirmed {
-        // Delete the branch.
-    }
+if let Some(PromptResult::Confirm(yes)) = prompt.result() {
+    assert!(yes);
 }
 ```
 
-### Selecting an option
+### Single choice
 
 ```rust
 use wuu::{Prompt, PromptKey, PromptResult};
@@ -182,63 +230,136 @@ prompt.handle_key(PromptKey::Down);
 prompt.handle_key(PromptKey::Enter);
 
 if let Some(PromptResult::Selected(index)) = prompt.result() {
-    let branch = branches[index];
-    // Switch to `branch`.
+    assert_eq!(branches[index], "release");
 }
 ```
 
-Use `Up` and `Down` to move through choices. Empty option lists return
-`PromptError::NoChoices`.
+### Multiple choices
 
-### Selecting multiple options
-
-Multi-select uses a caller-owned boolean slice, with one flag per option:
+Multi-select uses a caller-owned boolean slice with one flag per option:
 
 ```rust
 use wuu::{Prompt, PromptKey, PromptResult};
 
 let actions = ["stage", "commit", "push"];
 let mut selected = [false; 3];
-let mut prompt =
-    Prompt::multi_select("Choose actions", &actions, &mut selected).unwrap();
-
-prompt.handle_key(PromptKey::Toggle); // Toggle "stage"
+let mut prompt = Prompt::multi_select("Choose actions", &actions, &mut selected).unwrap();
+prompt.handle_key(PromptKey::Toggle);
 prompt.handle_key(PromptKey::Down);
-prompt.handle_key(PromptKey::Toggle); // Toggle "commit"
+prompt.handle_key(PromptKey::Toggle);
 prompt.handle_key(PromptKey::Enter);
 
 if let Some(PromptResult::Multiple(choices)) = prompt.result() {
-    // `choices` is [true, true, false].
+    assert_eq!(choices, &[true, true, false]);
 }
 ```
 
-`Toggle` or a space character toggles the highlighted option. The selection
-slice must have the same length as the options.
+`Up` and `Down` move through list items. `Toggle` or a space character
+toggles the highlighted item. Invalid empty lists and selection lengths return
+`PromptError`.
 
-### Selecting a Noun
+### Selecting a `Noun`
 
 [`Noun`](https://crates.io/crates/noun) is a 32-byte BLAKE3 content identifier.
-`noun_select` lets users choose among identifiers your application already
-has; it does not read files or compute their hashes. By default, each option
-shows the first eight bytes (16 hex characters). Set the prefix length to show
-more or fewer bytes:
+`noun_select()` chooses from identifiers already supplied by the caller; it
+does not read or hash files. By default it displays the first eight bytes
+(16 hexadecimal characters):
 
 ```rust
 use wuu::{Noun, Prompt, PromptKey, PromptResult};
 
-// In a VCS, these might be identifiers computed from file contents.
-let objects = [Noun::of(b"first file contents"), Noun::of(b"second file")];
-let mut prompt = Prompt::noun_select("Choose an object", &objects)
+let objects = [Noun::of(b"first file"), Noun::of(b"second file")];
+let mut prompt = Prompt::noun_select("Choose object", &objects)
     .unwrap()
     .noun_prefix_len(12);
-
 prompt.handle_key(PromptKey::Down);
 prompt.handle_key(PromptKey::Enter);
 
 if let Some(PromptResult::Noun(noun)) = prompt.result() {
-    // Use the selected content identifier.
+    assert_eq!(noun, &objects[1]);
 }
 ```
 
-Use `Escape` to cancel any prompt. Check `prompt.state()` for `Pending`,
-`Accepted`, or `Cancelled`; `result()` returns a value only after acceptance.
+`noun_prefix_len()` selects how many leading bytes to display (0–32).
+
+## Dashboard and drawing
+
+`Wuu` renders a character-cell server dashboard when given a `Context::Server`.
+Panels have a title, body, status, and optional contextual terminal:
+
+```rust
+use wuu::{Context, DropDownTerm, Panel, Status, Wuu};
+
+let panels = [
+    Panel::new(
+        "Working tree",
+        "2 modified\n1 untracked",
+        Status::Focused,
+        DropDownTerm::new("wuu status"),
+    ),
+    Panel::new(
+        "Last commit",
+        "a1b2c3d: Improve table output",
+        Status::Normal,
+        DropDownTerm::new(""),
+    ),
+];
+
+let ui = Wuu::new(Context::Server { cols: 80, rows: 24 });
+ui.render_dashboard("WUU VCS", &panels);
+```
+
+The renderer arranges panels in one or two columns. `Status::Focused` and
+`Status::Alert` mark panels; `DropDownTerm::open_with(prompt, output, input)`
+opens a panel's terminal drawer. Dashboard output requires `TERMINAL` to be
+configured.
+
+For direct character-cell drawing, use the [`Draw`](src/drawing.rs) trait with
+the server backend:
+
+```rust
+use wuu::{Draw, Serve};
+
+Serve::draw_container(2, 2, 30, 5, Some(" STATUS "), "Working tree clean");
+Serve::draw_horizontal_split(2, 7, 30);
+```
+
+This draws a bordered box and divider at the supplied zero-based coordinates.
+The trait also provides point, line, rectangle, square, fill, and text methods.
+Border characters such as `TOP_LEFT_CORNER` and `HORIZONTAL_LINE` are public
+constants.
+
+## Cursor, terminal, and framebuffer
+
+`cursor` provides cursor positioning, relative movement, save/restore,
+visibility, shape, and screen clearing. Coordinates are zero-based:
+
+```rust
+use wuu::cursor;
+
+cursor::set_cursor_pos(4, 2);
+assert_eq!(cursor::get_cursor_pos(), (4, 2));
+cursor::move_cursor_by(1, 1);
+cursor::save_cursor_pos();
+cursor::home();
+cursor::restore_cursor_pos();
+```
+
+`cursor::with_hidden_cursor(|| { ... })` hides the cursor during a draw and
+restores its position and prior visibility afterward.
+
+For OS integration, `ScreenData` implements `os_terminal::DrawTarget` over a
+32-bit framebuffer. The OS must provide a valid writable framebuffer pointer,
+dimensions, and row pitch; the memory must remain valid while a terminal uses
+it. Store the initialized `os_terminal::Terminal<ScreenData>` in
+`TERMINAL.lock()` before using print helpers. `TERMINAL` is a spin mutex around
+an optional terminal, so initialize it during single-threaded startup when
+possible.
+
+## `no_std` notes
+
+The library itself does not require `std`. Prompt text uses a fixed-size inline
+buffer, tables borrow their data, and message/diff/progress writers use
+`core::fmt::Write`. Your OS remains responsible for framebuffer ownership,
+terminal setup, key decoding, and application-specific VCS actions. The
+terminal backend may have separate allocator requirements.
