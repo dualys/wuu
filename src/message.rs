@@ -71,6 +71,111 @@ pub fn print_styled_message(level: MessageLevel, message: &str, mode: ColorMode)
     }
 }
 
+/// Writes an OpenRC-style successful status line.
+///
+/// `width` is the desired total line width in terminal columns.
+pub fn write_ok<W: Write>(
+    output: &mut W,
+    description: &str,
+    width: usize,
+    mode: ColorMode,
+) -> fmt::Result {
+    write_status(output, '*', description, "ok", width, Color::Green, mode)
+}
+
+/// Writes an OpenRC-style failed status line.
+///
+/// `width` is the desired total line width in terminal columns.
+pub fn write_ko<W: Write>(
+    output: &mut W,
+    description: &str,
+    width: usize,
+    mode: ColorMode,
+) -> fmt::Result {
+    write_status(output, '!', description, "ko", width, Color::Red, mode)
+}
+
+/// Writes an OpenRC-style successful status line with custom status text.
+///
+/// `width` is the desired total line width in terminal columns.
+pub fn write_ok_custom<W: Write>(
+    output: &mut W,
+    description: &str,
+    status: &str,
+    width: usize,
+    mode: ColorMode,
+) -> fmt::Result {
+    write_status(output, '*', description, status, width, Color::Green, mode)
+}
+
+/// Writes an OpenRC-style failed status line with custom status text.
+///
+/// `width` is the desired total line width in terminal columns.
+pub fn write_ko_custom<W: Write>(
+    output: &mut W,
+    description: &str,
+    status: &str,
+    width: usize,
+    mode: ColorMode,
+) -> fmt::Result {
+    write_status(output, '!', description, status, width, Color::Red, mode)
+}
+
+/// Prints an OpenRC-style successful status line to the configured terminal.
+pub fn ok(description: &str) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let width = term.columns();
+        let _ = write_ok(term, description, width, ColorMode::Ansi);
+    }
+}
+
+/// Prints an OpenRC-style failed status line to the configured terminal.
+pub fn ko(description: &str) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let width = term.columns();
+        let _ = write_ko(term, description, width, ColorMode::Ansi);
+    }
+}
+
+/// Prints an OpenRC-style successful status line with custom status text.
+pub fn ok_custom(description: &str, status: &str) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let width = term.columns();
+        let _ = write_ok_custom(term, description, status, width, ColorMode::Ansi);
+    }
+}
+
+/// Prints an OpenRC-style failed status line with custom status text.
+pub fn ko_custom(description: &str, status: &str) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let width = term.columns();
+        let _ = write_ko_custom(term, description, status, width, ColorMode::Ansi);
+    }
+}
+
+fn write_status<W: Write>(
+    output: &mut W,
+    marker: char,
+    description: &str,
+    status: &str,
+    width: usize,
+    color: Color,
+    mode: ColorMode,
+) -> fmt::Result {
+    let marker_text = if marker == '*' { "*" } else { "!" };
+    write_colored(output, marker_text, color, mode)?;
+    write!(output, " {description} ")?;
+
+    let fixed_width = 8 + description.chars().count() + status.chars().count();
+    for _ in 0..width.saturating_sub(fixed_width) {
+        output.write_char('.')?;
+    }
+
+    output.write_str(" [ ")?;
+    write_colored(output, status, color, mode)?;
+    output.write_str(" ]\n")
+}
+
 /// Prints a formatted, ANSI-colored message without allocating.
 ///
 /// This function is intended for the exported level macros.
@@ -141,7 +246,10 @@ macro_rules! error {
 
 #[cfg(test)]
 mod tests {
-    use super::{MessageLevel, write_formatted_message, write_message, write_styled_message};
+    use super::{
+        MessageLevel, write_formatted_message, write_ko, write_ko_custom, write_message, write_ok,
+        write_ok_custom, write_styled_message,
+    };
     use crate::style::ColorMode;
 
     #[test]
@@ -174,5 +282,29 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, "[\x1b[32mSUCCESS\x1b[0m] Created commit abc123\n");
+    }
+
+    #[test]
+    fn writes_openrc_style_status_lines() {
+        let mut output = String::new();
+        write_ok(&mut output, "Build", 25, ColorMode::Plain).unwrap();
+        write_ko(&mut output, "Network", 25, ColorMode::Plain).unwrap();
+        write_ok_custom(&mut output, "Service", "started", 25, ColorMode::Plain).unwrap();
+        write_ko_custom(&mut output, "Config", "invalid", 25, ColorMode::Plain).unwrap();
+
+        assert_eq!(
+            output,
+            "* Build .......... [ ok ]\n\
+! Network ........ [ ko ]\n\
+* Service ... [ started ]\n\
+! Config .... [ invalid ]\n"
+        );
+    }
+
+    #[test]
+    fn status_line_does_not_underflow_for_long_descriptions() {
+        let mut output = String::new();
+        write_ok(&mut output, "A very long description", 8, ColorMode::Plain).unwrap();
+        assert_eq!(output, "* A very long description  [ ok ]\n");
     }
 }

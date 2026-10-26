@@ -95,6 +95,32 @@ print_styled_message(MessageLevel::Success, "Commit created", ColorMode::Ansi);
 print_styled_message(MessageLevel::Warning, "No remote configured", ColorMode::Plain);
 ```
 
+## OpenRC-style status lines
+
+Use `ok()` and `ko()` to print successful and failed task lines. The marker and
+status are colored, and dots fill the available terminal width. The custom
+variants replace the default `ok` or `ko` label:
+
+```rust
+wuu::ok("Starting network");
+wuu::ko("Loading configuration");
+wuu::ok_custom("Starting database", "ready");
+wuu::ko_custom("Checking configuration", "invalid");
+```
+
+This produces lines in the following style:
+
+```text
+* Starting network ......................... [ ok ]
+! Loading configuration .................... [ ko ]
+* Starting database ..................... [ ready ]
+! Checking configuration ............... [ invalid ]
+```
+
+The `write_ok`, `write_ko`, `write_ok_custom`, and `write_ko_custom` variants
+write to any `core::fmt::Write` destination and accept an explicit width and
+color mode.
+
 ## Tables
 
 Tables borrow their headers and rows. `print_auto()` uses the configured

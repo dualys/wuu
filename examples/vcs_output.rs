@@ -1,6 +1,9 @@
 use core::fmt::Write as _;
 
-use wuu::{ColorMode, Diff, MessageLevel, ProgressBar, Table, write_message, write_styled_message};
+use wuu::{
+    ColorMode, Diff, MessageLevel, ProgressBar, Table, write_ko_custom, write_message, write_ok,
+    write_ok_custom, write_styled_message,
+};
 
 fn main() {
     let mut output = String::new();
@@ -10,6 +13,23 @@ fn main() {
         &mut output,
         MessageLevel::Success,
         "Commit a1b2c3d created",
+        ColorMode::Plain,
+    )
+    .unwrap();
+    write_ok(&mut output, "Working tree scanned", 48, ColorMode::Plain).unwrap();
+    write_ko_custom(
+        &mut output,
+        "Remote connection",
+        "offline",
+        48,
+        ColorMode::Plain,
+    )
+    .unwrap();
+    write_ok_custom(
+        &mut output,
+        "Objects fetched",
+        "complete",
+        48,
         ColorMode::Plain,
     )
     .unwrap();
