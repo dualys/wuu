@@ -3,22 +3,33 @@
 mod drawing;
 mod framebuffer;
 mod model;
+mod progress;
 mod stack_string;
+pub mod style;
 
 pub mod cursor;
+pub mod diff;
 pub mod message;
+pub mod prompt;
 pub mod serve;
 pub mod table;
 
+pub use diff::Diff;
 pub use drawing::{
     BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER, DisplayMode, Draw, HORIZONTAL_LINE, LEFT_SPLITTER,
     POINT_CHAR, RIGHT_SPLITTER, TOP_LEFT_CORNER, TOP_RIGHT_CORNER, VERTICAL_LINE,
 };
 pub use framebuffer::ScreenData;
 pub use framebuffer::TERMINAL;
-pub use message::{MessageLevel, print_message, write_message};
+pub use message::{
+    MessageLevel, print_message, print_styled_message, write_message, write_styled_message,
+};
 pub use model::{Context, DropDownTerm, Panel, Status};
+pub use noun::Noun;
+pub use progress::ProgressBar;
+pub use prompt::{Prompt, PromptError, PromptKey, PromptResult, PromptState, TEXT_CAPACITY};
 pub use stack_string::StackString;
+pub use style::{Color, ColorMode};
 pub use table::Table;
 
 /// High-level interface for clearing a display and rendering dashboards.
