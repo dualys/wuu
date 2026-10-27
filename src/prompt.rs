@@ -17,6 +17,26 @@ pub enum PromptKey {
     Up,
     /// Move the active choice down.
     Down,
+    /// Move the text cursor left or the active choice to the left.
+    Left,
+    /// Move the text cursor right or the active choice to the right.
+    Right,
+    /// Move the text cursor to the beginning or select the first item.
+    Home,
+    /// Move the text cursor to the end or select the last item.
+    End,
+    /// Delete the next character in a text prompt.
+    Delete,
+    /// Move one page through selectable choices.
+    PageUp,
+    /// Move one page through selectable choices.
+    PageDown,
+    /// Tab key.
+    Tab,
+    /// Control-modified character, such as `Control('c')`.
+    Control(char),
+    /// Alt-modified character.
+    Alt(char),
     /// Toggle the current choice or confirmation.
     Toggle,
     /// Accept the current value.
@@ -37,17 +57,29 @@ impl PromptKey {
 
     /// Converts a terminal input string to a prompt key.
     ///
-    /// Supports common ANSI arrow sequences, Enter, Escape, Backspace, and
-    /// single printable Unicode characters.
+    /// Supports common ANSI navigation/editing sequences, Enter, Escape,
+    /// Backspace, Tab, and single printable Unicode characters.
     #[must_use]
     pub fn from_ansi(input: &str) -> Option<Self> {
         match input {
-            "\x1b[A" | "\x1bOA" => Some(Self::Up),
-            "\x1b[B" | "\x1bOB" => Some(Self::Down),
             "\r" | "\n" => Some(Self::Enter),
             "\x1b" => Some(Self::Escape),
             "\x7f" | "\x08" => Some(Self::Backspace),
-            _ => {
+            "\t" => Some(Self::Tab),
+            input if input.len() == 1 => Self::from_ascii(input.as_bytes()[0]),
+            input if input.starts_with('\x1b') => {
+                let mut decoder = crate::keyboard::AsciiKeyDecoder::new();
+                let mut decoded = None;
+                for byte in input.bytes() {
+                    if let Some(key) = decoder.push(byte)
+                        && decoded.replace(key).is_some()
+                    {
+                        return None;
+                    }
+                }
+                decoded.or_else(|| decoder.flush_escape())
+            }
+            input => {
                 let mut chars = input.chars();
                 let ch = chars.next()?;
                 if chars.next().is_none() && !ch.is_control() {
@@ -119,6 +151,7 @@ pub struct Prompt<'a> {
     cursor: usize,
     text: [u8; TEXT_CAPACITY],
     text_len: usize,
+    text_cursor: usize,
     selections: Option<&'a mut [bool]>,
     noun_prefix_len: usize,
     state: PromptState,
@@ -191,6 +224,7 @@ impl<'a> Prompt<'a> {
             cursor: 0,
             text: [0; TEXT_CAPACITY],
             text_len: 0,
+            text_cursor: 0,
             selections: None,
             noun_prefix_len: 8,
             state: PromptState::Pending,
@@ -212,6 +246,10 @@ impl<'a> Prompt<'a> {
         }
 
         if key == PromptKey::Escape {
+            self.state = PromptState::Cancelled;
+            return;
+        }
+        if key == PromptKey::Control('c') {
             self.state = PromptState::Cancelled;
             return;
         }
@@ -296,22 +334,84 @@ impl<'a> Prompt<'a> {
     fn handle_text_key(&mut self, key: PromptKey) {
         match key {
             PromptKey::Character(ch) if !ch.is_control() => {
-                let mut encoded = [0; 4];
-                let bytes = ch.encode_utf8(&mut encoded).as_bytes();
-                if self.text_len + bytes.len() <= TEXT_CAPACITY {
-                    self.text[self.text_len..self.text_len + bytes.len()].copy_from_slice(bytes);
-                    self.text_len += bytes.len();
-                }
+                self.insert_text_char(ch);
             }
-            PromptKey::Backspace if self.text_len > 0 => {
-                self.text_len -= 1;
-                while self.text_len > 0 && self.text[self.text_len] & 0b1100_0000 == 0b1000_0000 {
-                    self.text_len -= 1;
+            PromptKey::Tab => self.insert_text_char('\t'),
+            PromptKey::Backspace => self.delete_previous_char(),
+            PromptKey::Delete => self.delete_next_char(),
+            PromptKey::Left => {
+                self.text_cursor = previous_char_boundary(&self.text, self.text_cursor);
+            }
+            PromptKey::Right => {
+                self.text_cursor = next_char_boundary(&self.text, self.text_cursor, self.text_len);
+            }
+            PromptKey::Home | PromptKey::Control('a') => self.text_cursor = 0,
+            PromptKey::End | PromptKey::Control('e') => self.text_cursor = self.text_len,
+            PromptKey::Control('u') => self.delete_text_range(0, self.text_cursor),
+            PromptKey::Control('k') => self.delete_text_range(self.text_cursor, self.text_len),
+            PromptKey::Control('w') => {
+                let mut start = previous_char_boundary(&self.text, self.text_cursor);
+                while start > 0
+                    && self.text[start..self.text_cursor]
+                        .iter()
+                        .all(u8::is_ascii_whitespace)
+                {
+                    start = previous_char_boundary(&self.text, start);
                 }
+                while start > 0
+                    && !self.text[start..self.text_cursor]
+                        .iter()
+                        .all(u8::is_ascii_whitespace)
+                {
+                    let previous = previous_char_boundary(&self.text, start);
+                    if self.text[previous..start]
+                        .iter()
+                        .all(u8::is_ascii_whitespace)
+                    {
+                        break;
+                    }
+                    start = previous;
+                }
+                self.delete_text_range(start, self.text_cursor);
             }
             PromptKey::Enter => self.state = PromptState::Accepted,
             _ => {}
         }
+    }
+
+    fn insert_text_char(&mut self, ch: char) {
+        let mut encoded = [0; 4];
+        let bytes = ch.encode_utf8(&mut encoded).as_bytes();
+        if self.text_len + bytes.len() > TEXT_CAPACITY {
+            return;
+        }
+        self.text.copy_within(
+            self.text_cursor..self.text_len,
+            self.text_cursor + bytes.len(),
+        );
+        self.text[self.text_cursor..self.text_cursor + bytes.len()].copy_from_slice(bytes);
+        self.text_cursor += bytes.len();
+        self.text_len += bytes.len();
+    }
+
+    fn delete_previous_char(&mut self) {
+        if self.text_cursor > 0 {
+            let start = previous_char_boundary(&self.text, self.text_cursor);
+            self.delete_text_range(start, self.text_cursor);
+        }
+    }
+
+    fn delete_next_char(&mut self) {
+        if self.text_cursor < self.text_len {
+            let end = next_char_boundary(&self.text, self.text_cursor, self.text_len);
+            self.delete_text_range(self.text_cursor, end);
+        }
+    }
+
+    fn delete_text_range(&mut self, start: usize, end: usize) {
+        self.text.copy_within(end..self.text_len, start);
+        self.text_len -= end - start;
+        self.text_cursor = start;
     }
 
     fn handle_confirm_key(&mut self, key: PromptKey) {
@@ -326,8 +426,12 @@ impl<'a> Prompt<'a> {
 
     fn handle_choice_key(&mut self, key: PromptKey, count: usize, multi: bool) {
         match key {
-            PromptKey::Up => self.cursor = self.cursor.saturating_sub(1),
-            PromptKey::Down => self.cursor = (self.cursor + 1).min(count - 1),
+            PromptKey::Up | PromptKey::Left => self.cursor = self.cursor.saturating_sub(1),
+            PromptKey::Down | PromptKey::Right => self.cursor = (self.cursor + 1).min(count - 1),
+            PromptKey::Home => self.cursor = 0,
+            PromptKey::End => self.cursor = count - 1,
+            PromptKey::PageUp => self.cursor = self.cursor.saturating_sub(10),
+            PromptKey::PageDown => self.cursor = (self.cursor + 10).min(count - 1),
             PromptKey::Toggle if multi => self.toggle_selection(),
             PromptKey::Character(' ') if multi => self.toggle_selection(),
             PromptKey::Enter => self.state = PromptState::Accepted,
@@ -348,9 +452,13 @@ impl<'a> Prompt<'a> {
         match self.kind {
             PromptKind::Text => {
                 output.write_str(": ")?;
-                output
-                    .write_str(core::str::from_utf8(&self.text[..self.text_len]).unwrap_or(""))?;
+                output.write_str(
+                    core::str::from_utf8(&self.text[..self.text_cursor]).unwrap_or(""),
+                )?;
                 output.write_char('_')?;
+                output.write_str(
+                    core::str::from_utf8(&self.text[self.text_cursor..self.text_len]).unwrap_or(""),
+                )?;
                 output.write_str("\r\n")?;
                 Ok(1)
             }
@@ -391,6 +499,22 @@ impl<'a> Prompt<'a> {
     }
 }
 
+fn previous_char_boundary(text: &[u8], mut position: usize) -> usize {
+    position = position.saturating_sub(1);
+    while position > 0 && text[position] & 0b1100_0000 == 0b1000_0000 {
+        position -= 1;
+    }
+    position
+}
+
+fn next_char_boundary(text: &[u8], mut position: usize, length: usize) -> usize {
+    position = (position + 1).min(length);
+    while position < length && text[position] & 0b1100_0000 == 0b1000_0000 {
+        position += 1;
+    }
+    position
+}
+
 fn write_noun_prefix<W: Write>(output: &mut W, noun: &Noun, bytes: usize) -> fmt::Result {
     for byte in noun.as_bytes().iter().take(bytes) {
         write!(output, "{byte:02x}")?;
@@ -415,10 +539,58 @@ mod tests {
     }
 
     #[test]
+    fn text_prompt_edits_at_cursor_and_preserves_unicode_boundaries() {
+        let mut prompt = Prompt::text("Message");
+        prompt.handle_key(PromptKey::Character('é'));
+        prompt.handle_key(PromptKey::Character('x'));
+        prompt.handle_key(PromptKey::Left);
+        prompt.handle_key(PromptKey::Home);
+        prompt.handle_key(PromptKey::Delete);
+        prompt.handle_key(PromptKey::Character('A'));
+        prompt.handle_key(PromptKey::End);
+        prompt.handle_key(PromptKey::Backspace);
+        prompt.handle_key(PromptKey::Enter);
+
+        assert!(matches!(prompt.result(), Some(PromptResult::Text("A"))));
+    }
+
+    #[test]
+    fn control_shortcuts_edit_text_and_control_c_cancels() {
+        let mut prompt = Prompt::text("Message");
+        for ch in "hello world".chars() {
+            prompt.handle_key(PromptKey::Character(ch));
+        }
+        prompt.handle_key(PromptKey::Control('w'));
+        prompt.handle_key(PromptKey::Control('a'));
+        prompt.handle_key(PromptKey::Control('k'));
+        prompt.handle_key(PromptKey::Enter);
+
+        assert!(matches!(prompt.result(), Some(PromptResult::Text(""))));
+
+        let mut cancelled = Prompt::text("Message");
+        cancelled.handle_key(PromptKey::Control('c'));
+        assert_eq!(cancelled.state(), PromptState::Cancelled);
+    }
+
+    #[test]
     fn select_returns_selected_option_index() {
         let options = ["main", "feature"];
         let mut prompt = Prompt::select("Branch", &options).unwrap();
         prompt.handle_key(PromptKey::Down);
+        prompt.handle_key(PromptKey::Enter);
+
+        assert!(matches!(prompt.result(), Some(PromptResult::Selected(1))));
+    }
+
+    #[test]
+    fn home_end_and_page_keys_navigate_choices() {
+        let options = ["one", "two", "three", "four", "five"];
+        let mut prompt = Prompt::select("Pick", &options).unwrap();
+        prompt.handle_key(PromptKey::End);
+        prompt.handle_key(PromptKey::PageUp);
+        prompt.handle_key(PromptKey::Left);
+        prompt.handle_key(PromptKey::Home);
+        prompt.handle_key(PromptKey::Right);
         prompt.handle_key(PromptKey::Enter);
 
         assert!(matches!(prompt.result(), Some(PromptResult::Selected(1))));
@@ -516,7 +688,10 @@ mod tests {
     fn ansi_input_maps_backspace_and_escape() {
         assert_eq!(PromptKey::from_ansi("\x7f"), Some(PromptKey::Backspace));
         assert_eq!(PromptKey::from_ansi("\x1b"), Some(PromptKey::Escape));
-        assert_eq!(PromptKey::from_ansi("\x1b[3~"), None);
+        assert_eq!(PromptKey::from_ansi("\x1b[3~"), Some(PromptKey::Delete));
+        assert_eq!(PromptKey::from_ansi("\x1b[1;5D"), Some(PromptKey::Left));
+        assert_eq!(PromptKey::from_ansi("\x03"), Some(PromptKey::Control('c')));
+        assert_eq!(PromptKey::from_ansi("\x1bx"), Some(PromptKey::Alt('x')));
         assert_eq!(PromptKey::from_ansi("abc"), None);
     }
 }

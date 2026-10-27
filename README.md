@@ -305,12 +305,14 @@ to `PromptKey`, call `handle_key()`, then redraw with `print()` or `write_to()`.
 use `keyboard::linux::LinuxKeyboard` to read actual key presses in raw mode.
 
 `PromptKey::from_ascii()` maps one ASCII byte using `ASCII_KEY_TABLE`.
-`AsciiKeyDecoder` also consumes ANSI arrow sequences incrementally, which is
-useful for serial terminals or an OS keyboard driver that translates keys into
-ASCII bytes. Call `flush_escape()` after the OS's Escape timeout to distinguish
-an Escape press from the prefix of an ANSI sequence. Alternatively,
-`PromptKey::from_ansi()` recognizes complete strings and `Prompt::handle_ansi()`
-dispatches one such string.
+`AsciiKeyDecoder` incrementally decodes ANSI/SS3 navigation and editing keys:
+arrows, Home, End, Delete, Page Up/Down, and Tab. It also maps ASCII control
+bytes to `PromptKey::Control`. This is useful for serial terminals or an OS
+keyboard driver that translates keys into ASCII bytes. Escape-prefixed
+printable characters are reported as `PromptKey::Alt`. Call
+`flush_escape()` after the OS's Escape timeout to distinguish an Escape press
+from the prefix of an ANSI sequence. Alternatively, `PromptKey::from_ansi()`
+recognizes complete sequences and `Prompt::handle_ansi()` dispatches them.
 
 Try the selectable branch example with:
 
@@ -331,9 +333,9 @@ it does not need to enable the Linux feature.
 use wuu::{Prompt, PromptKey, PromptResult};
 
 let mut prompt = Prompt::text("Commit message");
-prompt.handle_key(PromptKey::Character('F'));
-prompt.handle_key(PromptKey::Character('i'));
-prompt.handle_key(PromptKey::Character('x'));
+for ch in "Fix".chars() {
+    prompt.handle_key(PromptKey::Character(ch));
+}
 prompt.handle_key(PromptKey::Enter);
 
 if let Some(PromptResult::Text(message)) = prompt.result() {
@@ -342,8 +344,11 @@ if let Some(PromptResult::Text(message)) = prompt.result() {
 }
 ```
 
-Text input holds up to `TEXT_CAPACITY` (256) bytes. `Backspace` removes one
-Unicode character.
+Text input holds up to `TEXT_CAPACITY` (256) bytes. Left/Right move the
+insertion cursor; Home/End move to the beginning or end; Backspace and Delete
+remove the previous or next Unicode character. Control-A/E move to the
+beginning/end, Control-U/K remove text to the left/right, and Control-W removes
+the previous word. Control-C cancels a prompt.
 
 ### Confirmation
 
@@ -397,7 +402,8 @@ if let Some(PromptResult::Multiple(choices)) = prompt.result() {
 }
 ```
 
-`Up` and `Down` move through list items. `Toggle` or a space character
+`Up`/`Down` and Left/Right move through list items; Home/End select the first or
+last item and Page Up/Down move by ten. `Toggle` or a space character
 toggles the highlighted item. Invalid empty lists and selection lengths return
 `PromptError`.
 
