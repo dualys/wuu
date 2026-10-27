@@ -40,7 +40,11 @@ Add `wuu` to your dependencies:
 
 ```toml
 [dependencies]
-wuu = "0.1"
+wuu = "0.2.0"
+```
+
+```bash
+cargo add wuu
 ```
 
 `wuu` can be used from a `no_std` crate. Initialize

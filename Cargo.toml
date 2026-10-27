@@ -1,6 +1,6 @@
 [package]
 name = "wuu"
-version = "0.1.1"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.88"
 description = "Allocation-free terminal UI helpers for no_std operating systems and VCS tools"
@@ -22,7 +22,7 @@ spin = { version = "0.12.3", default-features = false, features = [
 os-terminal = { version = "0.7.4", default-features = false, features = [
     "bitmap",
 ] }
-noun = "0.1.0"
+noun = { version = "0.1.0", default-features = false }
 unicode-width = { version = "0.2.2", default-features = false }
 
 [[example]]
