@@ -23,6 +23,7 @@ os-terminal = { version = "0.7.4", default-features = false, features = [
     "bitmap",
 ] }
 noun = "0.1.0"
+unicode-width = { version = "0.2.2", default-features = false }
 
 [[example]]
 name = "prompts"

@@ -89,6 +89,27 @@ help to any `core::fmt::Write` destination. Definitions are borrowed, and a
 command supports up to `MAX_CONSOLE_ARGS` (32) arguments. For simple raw
 argument access, `Console::new` remains available.
 
+Commands can also declare subcommands. The parent parser validates the
+selected command's arguments; retrieve its parsed values with
+`subcommand_matches()`:
+
+```rust
+use wuu::{Arg, Command};
+
+let clone_args = [Arg::new("url").takes_value("URL").required()];
+let clone = Command::new("clone").args(&clone_args);
+let status = Command::new("status");
+let subcommands = [clone, status];
+let app = Command::new("wuu").subcommands(&subcommands);
+let argv = ["clone", "https://example.test/repo"];
+let matches = app.parse(&argv)?;
+
+if let Some(child) = matches.subcommand_matches()? {
+    assert_eq!(matches.subcommand_name(), Some("clone"));
+    assert_eq!(child.value("url"), Some("https://example.test/repo"));
+}
+```
+
 ## Formatted output and macros
 
 The `print!` and `println!` macros write formatted text to the configured
@@ -344,11 +365,13 @@ if let Some(PromptResult::Text(message)) = prompt.result() {
 }
 ```
 
-Text input holds up to `TEXT_CAPACITY` (256) bytes. Left/Right move the
-insertion cursor; Home/End move to the beginning or end; Backspace and Delete
-remove the previous or next Unicode character. Control-A/E move to the
-beginning/end, Control-U/K remove text to the left/right, and Control-W removes
-the previous word. Control-C cancels a prompt.
+Text input holds up to `TEXT_CAPACITY` (256) bytes. Its cursor is positioned in
+the terminal at the insertion point, including wide Unicode characters.
+Left/Right move the insertion cursor; Home/End move to the beginning or end;
+Backspace and Delete remove the previous or next Unicode character. Control-A/E
+move to the beginning/end, Control-U/K remove text to the left/right, and
+Control-W removes the previous word. Tab inserts four spaces. Control-C cancels
+a prompt.
 
 ### Confirmation
 
@@ -403,9 +426,17 @@ if let Some(PromptResult::Multiple(choices)) = prompt.result() {
 ```
 
 `Up`/`Down` and Left/Right move through list items; Home/End select the first or
-last item and Page Up/Down move by ten. `Toggle` or a space character
-toggles the highlighted item. Invalid empty lists and selection lengths return
-`PromptError`.
+last item and Page Up/Down move by the visible window size. `Toggle` or a space
+character toggles the highlighted item. Invalid empty lists and selection
+lengths return `PromptError`.
+
+Choice prompts show at most ten items by default, keeping the active item in
+view with indicators for hidden items above and below. Set a different window
+size with `.visible_items(count)`.
+
+In text prompts, `Control`/`Alt` + Left/Right moves by word where the terminal
+reports modified arrow keys. The equivalent `Control('b')` and `Control('f')`
+events are also supported.
 
 ### Selecting a `Noun`
 

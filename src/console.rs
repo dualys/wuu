@@ -78,6 +78,7 @@ pub struct Command<'a> {
     name: &'a str,
     about: &'a str,
     args: &'a [Arg<'a>],
+    subcommands: &'a [Command<'a>],
 }
 
 impl<'a> Command<'a> {
@@ -88,6 +89,7 @@ impl<'a> Command<'a> {
             name,
             about: "",
             args: &[],
+            subcommands: &[],
         }
     }
 
@@ -105,6 +107,13 @@ impl<'a> Command<'a> {
         self
     }
 
+    /// Sets the commands that may be selected after this command's options.
+    #[must_use]
+    pub const fn subcommands(mut self, subcommands: &'a [Command<'a>]) -> Self {
+        self.subcommands = subcommands;
+        self
+    }
+
     /// Parses arguments, excluding the executable name.
     pub fn parse(&'a self, args: &'a [&'a str]) -> Result<Console<'a>, ParseError<'a>> {
         if self.args.len() > MAX_CONSOLE_ARGS {
@@ -113,12 +122,22 @@ impl<'a> Command<'a> {
             });
         }
         validate_definition(self.args)?;
+        for (index, command) in self.subcommands.iter().enumerate() {
+            if command.name.is_empty()
+                || self.subcommands[..index]
+                    .iter()
+                    .any(|previous| previous.name == command.name)
+            {
+                return Err(ParseError::InvalidDefinition(command.name));
+            }
+        }
 
         let mut console = Console {
             args,
             command: Some(self),
             present: [false; MAX_CONSOLE_ARGS],
             values: [None; MAX_CONSOLE_ARGS],
+            subcommand: None,
         };
         let mut positional = 0;
         let mut index = 0;
@@ -189,8 +208,24 @@ impl<'a> Command<'a> {
                 continue;
             }
 
-            let arg_index = next_positional(self.args, positional)
-                .ok_or(ParseError::UnexpectedArgument(token))?;
+            if let Some(subcommand) = self
+                .subcommands
+                .iter()
+                .find(|command| command.name == token)
+            {
+                let subcommand_args = &args[index + 1..];
+                subcommand.parse(subcommand_args)?;
+                console.subcommand = Some((subcommand, subcommand_args));
+                break;
+            }
+
+            let arg_index = next_positional(self.args, positional).ok_or({
+                if self.subcommands.is_empty() {
+                    ParseError::UnexpectedArgument(token)
+                } else {
+                    ParseError::UnknownSubcommand(token)
+                }
+            })?;
             positional = arg_index + 1;
             console.present[arg_index] = true;
             console.values[arg_index] = Some(token);
@@ -235,6 +270,9 @@ impl<'a> Command<'a> {
                 write!(output, " [{}]", arg.id)?;
             }
         }
+        if !self.subcommands.is_empty() {
+            output.write_str(" [COMMAND]")?;
+        }
         output.write_char('\n')?;
         if !self.about.is_empty() {
             writeln!(output, "\n{}", self.about)?;
@@ -258,6 +296,16 @@ impl<'a> Command<'a> {
             }
             output.write_char('\n')?;
         }
+        if !self.subcommands.is_empty() {
+            output.write_str("\nCommands:\n")?;
+            for command in self.subcommands {
+                write!(output, "  {}", command.name)?;
+                if !command.about.is_empty() {
+                    write!(output, "\t{}", command.about)?;
+                }
+                output.write_char('\n')?;
+            }
+        }
         Ok(())
     }
 }
@@ -271,6 +319,8 @@ pub enum ParseError<'a> {
     InvalidDefinition(&'a str),
     /// The token does not match any declared option.
     UnknownArgument(&'a str),
+    /// The token does not match any declared subcommand.
+    UnknownSubcommand(&'a str),
     /// A positional token has no matching positional definition.
     UnexpectedArgument(&'a str),
     /// An option that takes a value was not given one.
@@ -289,6 +339,7 @@ pub struct Console<'a> {
     command: Option<&'a Command<'a>>,
     present: [bool; MAX_CONSOLE_ARGS],
     values: [Option<&'a str>; MAX_CONSOLE_ARGS],
+    subcommand: Option<(&'a Command<'a>, &'a [&'a str])>,
 }
 
 impl<'a> Console<'a> {
@@ -300,6 +351,7 @@ impl<'a> Console<'a> {
             command: None,
             present: [false; MAX_CONSOLE_ARGS],
             values: [None; MAX_CONSOLE_ARGS],
+            subcommand: None,
         }
     }
 
@@ -355,6 +407,22 @@ impl<'a> Console<'a> {
     #[must_use]
     pub fn flag(&self, id: &str) -> bool {
         self.contains(id)
+    }
+
+    /// Returns the selected subcommand name, if any.
+    #[must_use]
+    pub fn subcommand_name(&self) -> Option<&'a str> {
+        self.subcommand.map(|(command, _)| command.name)
+    }
+
+    /// Parses and returns matches for the selected subcommand.
+    ///
+    /// The subcommand was validated when this `Console` was created.
+    pub fn subcommand_matches(&self) -> Result<Option<Console<'a>>, ParseError<'a>> {
+        let Some((command, args)) = self.subcommand else {
+            return Ok(None);
+        };
+        command.parse(args).map(Some)
     }
 
     fn argument_index(&self, id: &str) -> Option<usize> {
@@ -545,6 +613,63 @@ mod tests {
         assert!(help.contains("Usage: demo [-v|--verbose] --config <FILE>"));
         assert!(help.contains("Demo application"));
         assert!(help.contains("Configuration path"));
+    }
+
+    #[test]
+    fn parses_subcommand_and_exposes_child_matches() {
+        let clone_args = [
+            Arg::new("repository").takes_value("URL").required(),
+            Arg::new("mirror").long("mirror"),
+        ];
+        let status_args = [Arg::new("short").short('s').long("short")];
+        let commands = [
+            Command::new("clone")
+                .about("Clone a repository")
+                .args(&clone_args),
+            Command::new("status")
+                .about("Show repository status")
+                .args(&status_args),
+        ];
+        let root = Command::new("wuu")
+            .about("Version control tool")
+            .subcommands(&commands);
+        let argv = ["clone", "https://example.test/repo", "--mirror"];
+
+        let matches = root.parse(&argv).unwrap();
+        assert_eq!(matches.subcommand_name(), Some("clone"));
+        let child = matches.subcommand_matches().unwrap().unwrap();
+        assert_eq!(child.value("repository"), Some("https://example.test/repo"));
+        assert!(child.has_flag("--mirror"));
+        assert_eq!(child.argument(1), Some("--mirror"));
+    }
+
+    #[test]
+    fn reports_unknown_subcommands_and_child_argument_errors() {
+        let commands = [Command::new("status")];
+        let root = Command::new("wuu").subcommands(&commands);
+
+        assert!(matches!(
+            root.parse(&["unknown"]),
+            Err(ParseError::UnknownSubcommand("unknown"))
+        ));
+        assert!(matches!(
+            root.parse(&["status", "--bad"]),
+            Err(ParseError::UnknownArgument("--bad"))
+        ));
+    }
+
+    #[test]
+    fn includes_subcommands_in_help() {
+        let commands = [
+            Command::new("status").about("Show status"),
+            Command::new("commit").about("Create a commit"),
+        ];
+        let root = Command::new("wuu").subcommands(&commands);
+        let mut help = String::new();
+        root.write_help(&mut help).unwrap();
+
+        assert!(help.contains("Usage: wuu [COMMAND]"));
+        assert!(help.contains("Commands:\n  status\tShow status\n  commit\tCreate a commit"));
     }
 
     #[test]

@@ -2,9 +2,11 @@ use core::cell::Cell;
 use core::fmt::{self, Write};
 
 use noun::Noun;
+use unicode_width::UnicodeWidthStr;
 
 /// Maximum number of bytes stored by a text prompt.
 pub const TEXT_CAPACITY: usize = 256;
+const DEFAULT_VISIBLE_ITEMS: usize = 10;
 
 /// Input event passed to a prompt by its host application.
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -21,6 +23,10 @@ pub enum PromptKey {
     Left,
     /// Move the text cursor right or the active choice to the right.
     Right,
+    /// Move the text cursor to the previous word.
+    WordLeft,
+    /// Move the text cursor to the next word.
+    WordRight,
     /// Move the text cursor to the beginning or select the first item.
     Home,
     /// Move the text cursor to the end or select the last item.
@@ -154,8 +160,10 @@ pub struct Prompt<'a> {
     text_cursor: usize,
     selections: Option<&'a mut [bool]>,
     noun_prefix_len: usize,
+    visible_items: usize,
     state: PromptState,
     rendered_lines: Cell<usize>,
+    rendered_newline: Cell<bool>,
 }
 
 impl<'a> Prompt<'a> {
@@ -227,8 +235,10 @@ impl<'a> Prompt<'a> {
             text_cursor: 0,
             selections: None,
             noun_prefix_len: 8,
+            visible_items: DEFAULT_VISIBLE_ITEMS,
             state: PromptState::Pending,
             rendered_lines: Cell::new(0),
+            rendered_newline: Cell::new(false),
         }
     }
 
@@ -236,6 +246,15 @@ impl<'a> Prompt<'a> {
     #[must_use]
     pub fn noun_prefix_len(mut self, bytes: usize) -> Self {
         self.noun_prefix_len = bytes.min(32);
+        self
+    }
+
+    /// Sets the maximum number of choices visible at once.
+    ///
+    /// The value is clamped to at least one item. Defaults to ten.
+    #[must_use]
+    pub const fn visible_items(mut self, count: usize) -> Self {
+        self.visible_items = if count == 0 { 1 } else { count };
         self
     }
 
@@ -307,7 +326,15 @@ impl<'a> Prompt<'a> {
     pub fn write_to<W: Write>(&self, output: &mut W) -> fmt::Result {
         let previous_lines = self.rendered_lines.get();
         if previous_lines > 0 {
-            write!(output, "\x1b[{previous_lines}A\r")?;
+            let lines_to_top = if self.rendered_newline.get() {
+                previous_lines
+            } else {
+                previous_lines - 1
+            };
+            if lines_to_top > 0 {
+                write!(output, "\x1b[{lines_to_top}A")?;
+            }
+            output.write_char('\r')?;
             for line in 0..previous_lines {
                 output.write_str("\x1b[2K")?;
                 if line + 1 < previous_lines {
@@ -321,6 +348,8 @@ impl<'a> Prompt<'a> {
 
         let lines = self.render_content(output)?;
         self.rendered_lines.set(lines);
+        self.rendered_newline
+            .set(!matches!(self.kind, PromptKind::Text) || self.state != PromptState::Pending);
         Ok(())
     }
 
@@ -336,7 +365,11 @@ impl<'a> Prompt<'a> {
             PromptKey::Character(ch) if !ch.is_control() => {
                 self.insert_text_char(ch);
             }
-            PromptKey::Tab => self.insert_text_char('\t'),
+            PromptKey::Tab => {
+                for _ in 0..4 {
+                    self.insert_text_char(' ');
+                }
+            }
             PromptKey::Backspace => self.delete_previous_char(),
             PromptKey::Delete => self.delete_next_char(),
             PromptKey::Left => {
@@ -344,6 +377,12 @@ impl<'a> Prompt<'a> {
             }
             PromptKey::Right => {
                 self.text_cursor = next_char_boundary(&self.text, self.text_cursor, self.text_len);
+            }
+            PromptKey::WordLeft | PromptKey::Control('b') | PromptKey::Alt('b') => {
+                self.text_cursor = previous_word_boundary(&self.text, self.text_cursor);
+            }
+            PromptKey::WordRight | PromptKey::Control('f') | PromptKey::Alt('f') => {
+                self.text_cursor = next_word_boundary(&self.text, self.text_cursor, self.text_len);
             }
             PromptKey::Home | PromptKey::Control('a') => self.text_cursor = 0,
             PromptKey::End | PromptKey::Control('e') => self.text_cursor = self.text_len,
@@ -430,8 +469,12 @@ impl<'a> Prompt<'a> {
             PromptKey::Down | PromptKey::Right => self.cursor = (self.cursor + 1).min(count - 1),
             PromptKey::Home => self.cursor = 0,
             PromptKey::End => self.cursor = count - 1,
-            PromptKey::PageUp => self.cursor = self.cursor.saturating_sub(10),
-            PromptKey::PageDown => self.cursor = (self.cursor + 10).min(count - 1),
+            PromptKey::PageUp => {
+                self.cursor = self.cursor.saturating_sub(self.visible_items);
+            }
+            PromptKey::PageDown => {
+                self.cursor = (self.cursor + self.visible_items).min(count - 1);
+            }
             PromptKey::Toggle if multi => self.toggle_selection(),
             PromptKey::Character(' ') if multi => self.toggle_selection(),
             PromptKey::Enter => self.state = PromptState::Accepted,
@@ -452,14 +495,15 @@ impl<'a> Prompt<'a> {
         match self.kind {
             PromptKind::Text => {
                 output.write_str(": ")?;
-                output.write_str(
-                    core::str::from_utf8(&self.text[..self.text_cursor]).unwrap_or(""),
-                )?;
-                output.write_char('_')?;
-                output.write_str(
-                    core::str::from_utf8(&self.text[self.text_cursor..self.text_len]).unwrap_or(""),
-                )?;
-                output.write_str("\r\n")?;
+                let text = core::str::from_utf8(&self.text[..self.text_len]).unwrap_or("");
+                output.write_str(text)?;
+                let trailing_width = UnicodeWidthStr::width(&text[self.text_cursor..self.text_len]);
+                if self.state == PromptState::Pending && trailing_width > 0 {
+                    write!(output, "\x1b[{trailing_width}D")?;
+                }
+                if self.state != PromptState::Pending {
+                    output.write_str("\r\n")?;
+                }
                 Ok(1)
             }
             PromptKind::Confirm => {
@@ -470,7 +514,11 @@ impl<'a> Prompt<'a> {
             }
             PromptKind::Select(options) | PromptKind::MultiSelect(options) => {
                 output.write_str("\r\n")?;
-                for (index, option) in options.iter().enumerate() {
+                let (start, end) = self.visible_range(options.len());
+                if start > 0 {
+                    writeln!(output, "  ... {start} more above")?;
+                }
+                for (index, option) in options.iter().enumerate().take(end).skip(start) {
                     output.write_str(if index == self.cursor { "> " } else { "  " })?;
                     if matches!(self.kind, PromptKind::MultiSelect(_)) {
                         let checked = self
@@ -484,18 +532,37 @@ impl<'a> Prompt<'a> {
                     output.write_str(option)?;
                     output.write_str("\r\n")?;
                 }
-                Ok(options.len() + 1)
+                if end < options.len() {
+                    writeln!(output, "  ... {} more below", options.len() - end)?;
+                }
+                Ok(1 + end - start + usize::from(start > 0) + usize::from(end < options.len()))
             }
             PromptKind::Nouns(nouns) => {
                 output.write_char('\n')?;
-                for (index, noun) in nouns.iter().enumerate() {
+                let (start, end) = self.visible_range(nouns.len());
+                if start > 0 {
+                    writeln!(output, "  ... {start} more above")?;
+                }
+                for (index, noun) in nouns.iter().enumerate().take(end).skip(start) {
                     output.write_str(if index == self.cursor { "> " } else { "  " })?;
                     write_noun_prefix(output, noun, self.noun_prefix_len)?;
                     output.write_str("\r\n")?;
                 }
-                Ok(nouns.len() + 1)
+                if end < nouns.len() {
+                    writeln!(output, "  ... {} more below", nouns.len() - end)?;
+                }
+                Ok(1 + end - start + usize::from(start > 0) + usize::from(end < nouns.len()))
             }
         }
+    }
+
+    fn visible_range(&self, count: usize) -> (usize, usize) {
+        let visible = count.min(self.visible_items);
+        let start = self
+            .cursor
+            .saturating_sub(visible.saturating_sub(1) / 2)
+            .min(count - visible);
+        (start, start + visible)
     }
 }
 
@@ -511,6 +578,62 @@ fn next_char_boundary(text: &[u8], mut position: usize, length: usize) -> usize 
     position = (position + 1).min(length);
     while position < length && text[position] & 0b1100_0000 == 0b1000_0000 {
         position += 1;
+    }
+    position
+}
+
+fn previous_word_boundary(text: &[u8], mut position: usize) -> usize {
+    while position > 0 {
+        let previous = previous_char_boundary(text, position);
+        let character = core::str::from_utf8(&text[previous..position])
+            .unwrap_or("")
+            .chars()
+            .next()
+            .unwrap_or(' ');
+        if !character.is_whitespace() {
+            break;
+        }
+        position = previous;
+    }
+    while position > 0 {
+        let previous = previous_char_boundary(text, position);
+        let character = core::str::from_utf8(&text[previous..position])
+            .unwrap_or("")
+            .chars()
+            .next()
+            .unwrap_or(' ');
+        if character.is_whitespace() {
+            break;
+        }
+        position = previous;
+    }
+    position
+}
+
+fn next_word_boundary(text: &[u8], mut position: usize, length: usize) -> usize {
+    while position < length {
+        let next = next_char_boundary(text, position, length);
+        let character = core::str::from_utf8(&text[position..next])
+            .unwrap_or("")
+            .chars()
+            .next()
+            .unwrap_or(' ');
+        if character.is_whitespace() {
+            break;
+        }
+        position = next;
+    }
+    while position < length {
+        let next = next_char_boundary(text, position, length);
+        let character = core::str::from_utf8(&text[position..next])
+            .unwrap_or("")
+            .chars()
+            .next()
+            .unwrap_or(' ');
+        if !character.is_whitespace() {
+            break;
+        }
+        position = next;
     }
     position
 }
@@ -562,6 +685,8 @@ mod tests {
         }
         prompt.handle_key(PromptKey::Control('w'));
         prompt.handle_key(PromptKey::Control('a'));
+        prompt.handle_key(PromptKey::WordRight);
+        prompt.handle_key(PromptKey::WordLeft);
         prompt.handle_key(PromptKey::Control('k'));
         prompt.handle_key(PromptKey::Enter);
 
@@ -570,6 +695,35 @@ mod tests {
         let mut cancelled = Prompt::text("Message");
         cancelled.handle_key(PromptKey::Control('c'));
         assert_eq!(cancelled.state(), PromptState::Cancelled);
+    }
+
+    #[test]
+    fn word_navigation_moves_across_unicode_whitespace_boundaries() {
+        let mut left = Prompt::text("Message");
+        for ch in "one deux".chars() {
+            left.handle_key(PromptKey::Character(ch));
+        }
+        left.handle_key(PromptKey::WordLeft);
+        left.handle_key(PromptKey::Character('|'));
+        left.handle_key(PromptKey::Enter);
+
+        assert!(matches!(
+            left.result(),
+            Some(PromptResult::Text("one |deux"))
+        ));
+
+        let mut right = Prompt::text("Message");
+        for ch in "one deux".chars() {
+            right.handle_key(PromptKey::Character(ch));
+        }
+        right.handle_key(PromptKey::Home);
+        right.handle_key(PromptKey::WordRight);
+        right.handle_key(PromptKey::Character('|'));
+        right.handle_key(PromptKey::Enter);
+        assert!(matches!(
+            right.result(),
+            Some(PromptResult::Text("one |deux"))
+        ));
     }
 
     #[test]
@@ -594,6 +748,31 @@ mod tests {
         prompt.handle_key(PromptKey::Enter);
 
         assert!(matches!(prompt.result(), Some(PromptResult::Selected(1))));
+    }
+
+    #[test]
+    fn selection_scrolls_a_bounded_window_around_the_active_item() {
+        let options = [
+            "item 0", "item 1", "item 2", "item 3", "item 4", "item 5", "item 6", "item 7",
+            "item 8", "item 9", "item 10", "item 11",
+        ];
+        let mut prompt = Prompt::select("Pick", &options).unwrap().visible_items(4);
+        let mut output = String::new();
+
+        prompt.write_to(&mut output).unwrap();
+        assert!(output.contains("> item 0"));
+        assert!(output.contains("item 3"));
+        assert!(!output.contains("item 4"));
+        assert!(output.contains("... 8 more below"));
+
+        prompt.handle_key(PromptKey::PageDown);
+        output.clear();
+        prompt.write_to(&mut output).unwrap();
+        assert!(output.contains("... 3 more above"));
+        assert!(output.contains("> item 4"));
+        assert!(output.contains("item 6"));
+        assert!(!output.contains("item 7"));
+        assert!(output.contains("... 5 more below"));
     }
 
     #[test]
@@ -689,9 +868,36 @@ mod tests {
         assert_eq!(PromptKey::from_ansi("\x7f"), Some(PromptKey::Backspace));
         assert_eq!(PromptKey::from_ansi("\x1b"), Some(PromptKey::Escape));
         assert_eq!(PromptKey::from_ansi("\x1b[3~"), Some(PromptKey::Delete));
-        assert_eq!(PromptKey::from_ansi("\x1b[1;5D"), Some(PromptKey::Left));
+        assert_eq!(PromptKey::from_ansi("\x1b[1;5D"), Some(PromptKey::WordLeft));
         assert_eq!(PromptKey::from_ansi("\x03"), Some(PromptKey::Control('c')));
         assert_eq!(PromptKey::from_ansi("\x1bx"), Some(PromptKey::Alt('x')));
         assert_eq!(PromptKey::from_ansi("abc"), None);
+    }
+
+    #[test]
+    fn text_prompt_positions_terminal_cursor_using_display_columns() {
+        let mut prompt = Prompt::text("Message");
+        prompt.handle_key(PromptKey::Character('e'));
+        prompt.handle_key(PromptKey::Character('界'));
+        prompt.handle_key(PromptKey::Character('x'));
+        prompt.handle_key(PromptKey::Left);
+        let mut output = String::new();
+
+        prompt.write_to(&mut output).unwrap();
+
+        assert!(output.starts_with("Message: e界x"));
+        assert!(output.ends_with("\x1b[1D"));
+        assert!(!output.contains('_'));
+        assert!(!output.ends_with("\r\n"));
+
+        prompt.handle_key(PromptKey::Enter);
+        output.clear();
+        prompt.write_to(&mut output).unwrap();
+        assert!(output.ends_with("\r\n"));
+
+        output.clear();
+        prompt.write_to(&mut output).unwrap();
+        assert!(output.contains("\x1b[1A\r\x1b[2K"));
+        assert!(output.ends_with("\r\n"));
     }
 }

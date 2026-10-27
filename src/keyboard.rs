@@ -115,6 +115,8 @@ impl AsciiKeyDecoder {
         match final_byte {
             b'A' => Some(PromptKey::Up),
             b'B' => Some(PromptKey::Down),
+            b'C' if self.is_word_modifier() => Some(PromptKey::WordRight),
+            b'D' if self.is_word_modifier() => Some(PromptKey::WordLeft),
             b'C' => Some(PromptKey::Right),
             b'D' => Some(PromptKey::Left),
             b'H' => Some(PromptKey::Home),
@@ -131,22 +133,42 @@ impl AsciiKeyDecoder {
             _ => None,
         }
     }
+
+    fn modifier(&self) -> u16 {
+        parameter(&self.csi_params[..usize::from(self.csi_len)], 1)
+    }
+
+    fn is_word_modifier(&self) -> bool {
+        matches!(self.modifier(), 3 | 5 | 7)
+    }
 }
 
-fn first_parameter(params: &[u8]) -> u16 {
+fn parameter(params: &[u8], target: usize) -> u16 {
     let mut value = 0u16;
+    let mut current = 0;
+    let mut found = false;
     for byte in params.iter().copied() {
         if byte == b';' || byte == b':' {
-            break;
+            if current == target {
+                return value;
+            }
+            current += 1;
+            value = 0;
+            continue;
         }
         if !byte.is_ascii_digit() {
             return 0;
         }
+        found = true;
         value = value
             .saturating_mul(10)
             .saturating_add(u16::from(byte - b'0'));
     }
-    value
+    if current == target && found { value } else { 0 }
+}
+
+fn first_parameter(params: &[u8]) -> u16 {
+    parameter(params, 0)
 }
 
 fn decode_ss3(final_byte: u8) -> Option<PromptKey> {
@@ -208,6 +230,20 @@ pub mod linux {
                 }
                 KeyCode::Up => Some(PromptKey::Up),
                 KeyCode::Down => Some(PromptKey::Down),
+                KeyCode::Left
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    Some(PromptKey::WordLeft)
+                }
+                KeyCode::Right
+                    if event
+                        .modifiers
+                        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                {
+                    Some(PromptKey::WordRight)
+                }
                 KeyCode::Left => Some(PromptKey::Left),
                 KeyCode::Right => Some(PromptKey::Right),
                 KeyCode::Home => Some(PromptKey::Home),
@@ -281,7 +317,8 @@ mod tests {
         assert_sequence(&mut decoder, b"\x1b[3~", Some(PromptKey::Delete));
         assert_sequence(&mut decoder, b"\x1b[5~", Some(PromptKey::PageUp));
         assert_sequence(&mut decoder, b"\x1b[6~", Some(PromptKey::PageDown));
-        assert_sequence(&mut decoder, b"\x1b[1;5D", Some(PromptKey::Left));
+        assert_sequence(&mut decoder, b"\x1b[1;5D", Some(PromptKey::WordLeft));
+        assert_sequence(&mut decoder, b"\x1b[1;3C", Some(PromptKey::WordRight));
         assert_sequence(&mut decoder, b"\x1b[Z", Some(PromptKey::Tab));
         assert_sequence(&mut decoder, b"\x1bOD", Some(PromptKey::Left));
         assert_sequence(&mut decoder, b"\x1bOF", Some(PromptKey::End));

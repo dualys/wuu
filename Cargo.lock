@@ -459,4 +459,5 @@ dependencies = [
  "noun",
  "os-terminal",
  "spin",
+ "unicode-width",
 ]
