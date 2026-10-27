@@ -92,8 +92,9 @@ argument access, `Console::new` remains available.
 ## Formatted output and macros
 
 The `print!` and `println!` macros write formatted text to the configured
-terminal. The `info!`, `success!`, `warning!`, and `error!` macros add a
-severity label and ANSI color without allocating:
+terminal. The `info!`, `success!`, `warning!`, and `error!` macros render
+OpenRC-style status lines, padded to the terminal width and colored without
+allocating:
 
 ```rust
 wuu::println!("wuu VCS starting");
@@ -103,16 +104,21 @@ wuu::warning!("{} files are unstaged", 2);
 wuu::error!("Could not open {}", "config.wuu");
 ```
 
-The output looks like this (the severity labels are colored on an ANSI
-terminal):
+The output looks like this (the marker and status are colored on an ANSI
+terminal; dot padding follows the terminal width):
 
 ```text
 wuu VCS starting
-[INFO] Scanning 12 files
-[SUCCESS] Commit a1b2c3d created
-[WARNING] 2 files are unstaged
-[ERROR] Could not open config.wuu
+* Scanning 12 files .................. [ MESSAGE ]
+* Commit a1b2c3d created ............. [ SUCCESS ]
+! 2 files are unstaged ............... [ WARNING ]
+! Could not open config.wuu .......... [ FAILURE ]
 ```
+
+`info!`, `success!`, `warning!`, and `error!` use the statuses `[ MESSAGE ]`,
+`[ SUCCESS ]`, `[ WARNING ]`, and `[ FAILURE ]` respectively. Informational and
+successful lines use the `*` marker; warnings and errors use `!`. Plain
+`println!` output remains unchanged.
 
 [`format_stack!`](src/stack_string.rs) formats into a fixed 256-byte buffer:
 

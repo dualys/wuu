@@ -33,6 +33,22 @@ impl MessageLevel {
             Self::Error => Color::Red,
         }
     }
+
+    const fn status(self) -> &'static str {
+        match self {
+            Self::Info => "MESSAGE",
+            Self::Success => "SUCCESS",
+            Self::Warning => "WARNING",
+            Self::Error => "FAILURE",
+        }
+    }
+
+    const fn marker(self) -> char {
+        match self {
+            Self::Info | Self::Success => '*',
+            Self::Warning | Self::Error => '!',
+        }
+    }
 }
 
 /// Writes a labeled message and newline to any [`fmt::Write`] destination.
@@ -190,6 +206,53 @@ pub fn print_formatted_message(level: MessageLevel, args: Arguments<'_>) {
     }
 }
 
+/// Prints a formatted message as an OpenRC-style status line.
+///
+/// The message is formatted twice into the terminal: first to count its
+/// characters for dot alignment, then to render it without allocating.
+#[doc(hidden)]
+pub fn print_formatted_status(level: MessageLevel, args: Arguments<'_>) {
+    if let Some(term) = crate::TERMINAL.lock().as_mut() {
+        let width = term.columns();
+        let _ = write_formatted_status(term, level, args, width, ColorMode::Ansi);
+    }
+}
+
+fn write_formatted_status<W: Write>(
+    output: &mut W,
+    level: MessageLevel,
+    args: Arguments<'_>,
+    width: usize,
+    mode: ColorMode,
+) -> fmt::Result {
+    let mut counter = CharacterCounter(0);
+    counter.write_fmt(args)?;
+
+    let marker = if level.marker() == '*' { "*" } else { "!" };
+    write_colored(output, marker, level.color(), mode)?;
+    output.write_char(' ')?;
+    output.write_fmt(args)?;
+    output.write_char(' ')?;
+
+    let fixed_width = 8 + counter.0 + level.status().chars().count();
+    for _ in 0..width.saturating_sub(fixed_width) {
+        output.write_char('.')?;
+    }
+
+    output.write_str(" [ ")?;
+    write_colored(output, level.status(), level.color(), mode)?;
+    output.write_str(" ]\n")
+}
+
+struct CharacterCounter(usize);
+
+impl Write for CharacterCounter {
+    fn write_str(&mut self, text: &str) -> fmt::Result {
+        self.0 += text.chars().count();
+        Ok(())
+    }
+}
+
 fn write_formatted_message<W: Write>(
     output: &mut W,
     level: MessageLevel,
@@ -208,7 +271,7 @@ fn write_formatted_message<W: Write>(
 #[macro_export]
 macro_rules! info {
     ($($arg:tt)*) => {
-        $crate::message::print_formatted_message(
+        $crate::message::print_formatted_status(
             $crate::MessageLevel::Info,
             core::format_args!($($arg)*),
         )
@@ -219,7 +282,7 @@ macro_rules! info {
 #[macro_export]
 macro_rules! success {
     ($($arg:tt)*) => {
-        $crate::message::print_formatted_message(
+        $crate::message::print_formatted_status(
             $crate::MessageLevel::Success,
             core::format_args!($($arg)*),
         )
@@ -230,7 +293,7 @@ macro_rules! success {
 #[macro_export]
 macro_rules! warning {
     ($($arg:tt)*) => {
-        $crate::message::print_formatted_message(
+        $crate::message::print_formatted_status(
             $crate::MessageLevel::Warning,
             core::format_args!($($arg)*),
         )
@@ -241,7 +304,7 @@ macro_rules! warning {
 #[macro_export]
 macro_rules! error {
     ($($arg:tt)*) => {
-        $crate::message::print_formatted_message(
+        $crate::message::print_formatted_status(
             $crate::MessageLevel::Error,
             core::format_args!($($arg)*),
         )
@@ -251,8 +314,8 @@ macro_rules! error {
 #[cfg(test)]
 mod tests {
     use super::{
-        MessageLevel, write_formatted_message, write_ko, write_ko_custom, write_message, write_ok,
-        write_ok_custom, write_styled_message,
+        MessageLevel, write_formatted_message, write_formatted_status, write_ko, write_ko_custom,
+        write_message, write_ok, write_ok_custom, write_styled_message,
     };
     use crate::style::ColorMode;
 
@@ -286,6 +349,36 @@ mod tests {
         )
         .unwrap();
         assert_eq!(output, "[\x1b[32mSUCCESS\x1b[0m] Created commit abc123\n");
+    }
+
+    #[test]
+    fn formats_level_macros_as_openrc_status_lines() {
+        let mut output = String::new();
+        for (level, message) in [
+            (MessageLevel::Info, "Scanning 12 files"),
+            (MessageLevel::Success, "Commit a1b2c3d created"),
+            (MessageLevel::Warning, "2 files are unstaged"),
+            (MessageLevel::Error, "Could not open config.wuu"),
+        ] {
+            write_formatted_status(
+                &mut output,
+                level,
+                format_args!("{message}"),
+                50,
+                ColorMode::Plain,
+            )
+            .unwrap();
+        }
+
+        assert_eq!(
+            output,
+            concat!(
+                "* Scanning 12 files .................. [ MESSAGE ]\n",
+                "* Commit a1b2c3d created ............. [ SUCCESS ]\n",
+                "! 2 files are unstaged ............... [ WARNING ]\n",
+                "! Could not open config.wuu .......... [ FAILURE ]\n",
+            )
+        );
     }
 
     #[test]
