@@ -48,6 +48,47 @@ wuu = "0.1"
 calling terminal print helpers. For code that does not have a configured
 terminal, the `write_to` APIs render to any `core::fmt::Write` destination.
 
+## Command-line arguments
+
+[`Command`](src/console.rs) and [`Arg`](src/console.rs) provide a declarative
+command-line parser without heap allocation. In a `no_std` application, the OS
+or bootloader must provide and tokenize the arguments; `wuu` does not read
+process arguments itself. Pass arguments without the executable name:
+
+```rust
+use wuu::{Arg, Command};
+
+let definitions = [
+    Arg::new("verbose")
+        .short('v')
+        .long("verbose")
+        .help("Show detailed output"),
+    Arg::new("config")
+        .short('c')
+        .long("config")
+        .takes_value("FILE")
+        .required()
+        .help("Configuration file"),
+    Arg::new("input").takes_value("INPUT"),
+];
+let command = Command::new("wuu")
+    .about("A no_std command-line application")
+    .args(&definitions);
+let argv = ["-v", "--config=app.toml", "source.wuu"];
+let matches = command.parse(&argv)?;
+
+assert!(matches.flag("verbose"));
+assert_eq!(matches.value("config"), Some("app.toml"));
+assert_eq!(matches.value("input"), Some("source.wuu"));
+```
+
+The parser supports long options, short options (including combined flags),
+`--name value` and `--name=value`, positional arguments, required arguments,
+and `--` to end option parsing. `Command::write_help` writes usage and argument
+help to any `core::fmt::Write` destination. Definitions are borrowed, and a
+command supports up to `MAX_CONSOLE_ARGS` (32) arguments. For simple raw
+argument access, `Console::new` remains available.
+
 ## Formatted output and macros
 
 The `print!` and `println!` macros write formatted text to the configured

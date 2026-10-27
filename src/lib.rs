@@ -7,6 +7,7 @@ mod progress;
 mod stack_string;
 pub mod style;
 
+pub mod console;
 pub mod cursor;
 pub mod diff;
 pub mod keyboard;
@@ -15,6 +16,7 @@ pub mod prompt;
 pub mod serve;
 pub mod table;
 
+pub use console::{Arg, Command, Console, MAX_CONSOLE_ARGS, ParseError};
 pub use diff::Diff;
 pub use drawing::{
     BOTTOM_LEFT_CORNER, BOTTOM_RIGHT_CORNER, DisplayMode, Draw, HORIZONTAL_LINE, LEFT_SPLITTER,
