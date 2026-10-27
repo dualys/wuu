@@ -156,9 +156,9 @@ impl<'a> Command<'a> {
             }
 
             if !positional_only && token.starts_with('-') && token != "-" {
-                let mut short_chars = token[1..].char_indices().peekable();
+                let short_chars = token[1..].char_indices();
                 let mut consumed_token = false;
-                while let Some((offset, short)) = short_chars.next() {
+                for (offset, short) in short_chars {
                     let arg_index = self
                         .args
                         .iter()
