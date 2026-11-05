@@ -114,6 +114,7 @@ impl<'a> Command<'a> {
         self
     }
 
+    #![allow(clippy::too_many_lines)]
     /// Parses arguments, excluding the executable name.
     pub fn parse(&'a self, args: &'a [&'a str]) -> Result<Console<'a>, ParseError<'a>> {
         self.validate()?;
