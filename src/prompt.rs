@@ -75,15 +75,15 @@ impl PromptKey {
             input if input.len() == 1 => Self::from_ascii(input.as_bytes()[0]),
             input if input.starts_with('\x1b') => {
                 let mut decoder = crate::keyboard::AsciiKeyDecoder::new();
-                let mut decoded = None;
+                let mut decoded_key = None;
                 for byte in input.bytes() {
                     if let Some(key) = decoder.push(byte)
-                        && decoded.replace(key).is_some()
+                        && decoded_key.replace(key).is_some()
                     {
                         return None;
                     }
                 }
-                decoded.or_else(|| decoder.flush_escape())
+                decoded_key.or_else(|| decoder.flush_escape())
             }
             input => {
                 let mut chars = input.chars();
@@ -182,7 +182,7 @@ impl<'a> Prompt<'a> {
     /// Creates a single-choice prompt.
     ///
     /// Returns [`PromptError::NoChoices`] when `options` is empty.
-    pub fn select(message: &'a str, options: &'a [&'a str]) -> Result<Self, PromptError> {
+    pub const fn select(message: &'a str, options: &'a [&'a str]) -> Result<Self, PromptError> {
         if options.is_empty() {
             return Err(PromptError::NoChoices);
         }
@@ -218,7 +218,7 @@ impl<'a> Prompt<'a> {
     ///
     /// By default, eight hash bytes (16 hex characters) are shown. Use
     /// [`noun_prefix_len`](Self::noun_prefix_len) to change this.
-    pub fn noun_select(message: &'a str, nouns: &'a [Noun]) -> Result<Self, PromptError> {
+    pub const fn noun_select(message: &'a str, nouns: &'a [Noun]) -> Result<Self, PromptError> {
         if nouns.is_empty() {
             return Err(PromptError::NoChoices);
         }
@@ -453,7 +453,7 @@ impl<'a> Prompt<'a> {
         self.text_cursor = start;
     }
 
-    fn handle_confirm_key(&mut self, key: PromptKey) {
+    const fn handle_confirm_key(&mut self, key: PromptKey) {
         match key {
             PromptKey::Toggle => self.cursor = 1 - self.cursor,
             PromptKey::Character('y' | 'Y') => self.cursor = 1,
@@ -475,8 +475,7 @@ impl<'a> Prompt<'a> {
             PromptKey::PageDown => {
                 self.cursor = (self.cursor + self.visible_items).min(count - 1);
             }
-            PromptKey::Toggle if multi => self.toggle_selection(),
-            PromptKey::Character(' ') if multi => self.toggle_selection(),
+            PromptKey::Toggle | PromptKey::Character(' ') if multi => self.toggle_selection(),
             PromptKey::Enter => self.state = PromptState::Accepted,
             _ => {}
         }
@@ -566,7 +565,7 @@ impl<'a> Prompt<'a> {
     }
 }
 
-fn previous_char_boundary(text: &[u8], mut position: usize) -> usize {
+const fn previous_char_boundary(text: &[u8], mut position: usize) -> usize {
     position = position.saturating_sub(1);
     while position > 0 && text[position] & 0b1100_0000 == 0b1000_0000 {
         position -= 1;

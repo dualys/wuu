@@ -45,7 +45,7 @@ impl<'a> ProgressBar<'a> {
     }
 
     /// Sets the number of characters in the bar interior.
-    pub fn set_width(&mut self, width: usize) {
+    pub const fn set_width(&mut self, width: usize) {
         self.width = width;
     }
 

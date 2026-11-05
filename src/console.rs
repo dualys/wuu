@@ -78,7 +78,7 @@ pub struct Command<'a> {
     name: &'a str,
     about: &'a str,
     args: &'a [Arg<'a>],
-    subcommands: &'a [Command<'a>],
+    subcommands: &'a [Self],
 }
 
 impl<'a> Command<'a> {
@@ -109,28 +109,14 @@ impl<'a> Command<'a> {
 
     /// Sets the commands that may be selected after this command's options.
     #[must_use]
-    pub const fn subcommands(mut self, subcommands: &'a [Command<'a>]) -> Self {
+    pub const fn subcommands(mut self, subcommands: &'a [Self]) -> Self {
         self.subcommands = subcommands;
         self
     }
 
     /// Parses arguments, excluding the executable name.
     pub fn parse(&'a self, args: &'a [&'a str]) -> Result<Console<'a>, ParseError<'a>> {
-        if self.args.len() > MAX_CONSOLE_ARGS {
-            return Err(ParseError::TooManyDefinitions {
-                maximum: MAX_CONSOLE_ARGS,
-            });
-        }
-        validate_definition(self.args)?;
-        for (index, command) in self.subcommands.iter().enumerate() {
-            if command.name.is_empty()
-                || self.subcommands[..index]
-                    .iter()
-                    .any(|previous| previous.name == command.name)
-            {
-                return Err(ParseError::InvalidDefinition(command.name));
-            }
-        }
+        self.validate()?;
 
         let mut console = Console {
             args,
@@ -238,6 +224,25 @@ impl<'a> Command<'a> {
             }
         }
         Ok(console)
+    }
+
+    fn validate(&self) -> Result<(), ParseError<'a>> {
+        if self.args.len() > MAX_CONSOLE_ARGS {
+            return Err(ParseError::TooManyDefinitions {
+                maximum: MAX_CONSOLE_ARGS,
+            });
+        }
+        validate_definition(self.args)?;
+        for (index, command) in self.subcommands.iter().enumerate() {
+            if command.name.is_empty()
+                || self.subcommands[..index]
+                    .iter()
+                    .any(|previous| previous.name == command.name)
+            {
+                return Err(ParseError::InvalidDefinition(command.name));
+            }
+        }
+        Ok(())
     }
 
     /// Writes a concise usage and argument list to any formatter.
@@ -418,7 +423,7 @@ impl<'a> Console<'a> {
     /// Parses and returns matches for the selected subcommand.
     ///
     /// The subcommand was validated when this `Console` was created.
-    pub fn subcommand_matches(&self) -> Result<Option<Console<'a>>, ParseError<'a>> {
+    pub fn subcommand_matches(&self) -> Result<Option<Self>, ParseError<'a>> {
         let Some((command, args)) = self.subcommand else {
             return Ok(None);
         };
@@ -473,19 +478,18 @@ fn consume_option<'a>(
     token: &'a str,
 ) -> Result<(), ParseError<'a>> {
     if takes_value {
-        let value = match inline_value {
-            Some(value) => value,
-            None => {
-                let value = args
-                    .get(*index)
-                    .copied()
-                    .ok_or(ParseError::MissingValue(token))?;
-                if value == "--" {
-                    return Err(ParseError::MissingValue(token));
-                }
-                *index += 1;
-                value
+        let value = if let Some(value) = inline_value {
+            value
+        } else {
+            let value = args
+                .get(*index)
+                .copied()
+                .ok_or(ParseError::MissingValue(token))?;
+            if value == "--" {
+                return Err(ParseError::MissingValue(token));
             }
+            *index += 1;
+            value
         };
         console.values[arg_index] = Some(value);
     } else if inline_value.is_some() {

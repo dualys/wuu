@@ -50,7 +50,7 @@ impl Wuu {
     }
 
     /// Changes the display environment used by this interface.
-    pub fn set_context(&mut self, context: Context) {
+    pub const fn set_context(&mut self, context: Context) {
         self.context = context;
     }
 

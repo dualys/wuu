@@ -35,7 +35,7 @@ impl<'a> DropDownTerm<'a> {
     }
 
     /// Toggles whether the terminal drawer is open.
-    pub fn toggle(&mut self) {
+    pub const fn toggle(&mut self) {
         self.is_open = !self.is_open;
     }
 }

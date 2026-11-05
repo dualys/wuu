@@ -14,11 +14,13 @@ const fn ascii_key_table() -> [Option<PromptKey>; 128] {
     table[27] = Some(PromptKey::Escape);
     table[127] = Some(PromptKey::Backspace);
     let mut control = 1;
+    let mut letter = b'a';
     while control <= 26 {
         if control != 8 && control != 9 && control != 10 && control != 13 {
-            table[control] = Some(PromptKey::Control((b'a' + control as u8 - 1) as char));
+            table[control] = Some(PromptKey::Control(letter as char));
         }
         control += 1;
+        letter += 1;
     }
     table
 }
@@ -102,7 +104,7 @@ impl AsciiKeyDecoder {
     }
 
     /// Resolves a pending Escape byte when no further sequence byte arrives.
-    pub fn flush_escape(&mut self) -> Option<PromptKey> {
+    pub const fn flush_escape(&mut self) -> Option<PromptKey> {
         if self.escape_state == 1 {
             self.escape_state = 0;
             Some(PromptKey::Escape)
@@ -171,7 +173,7 @@ fn first_parameter(params: &[u8]) -> u16 {
     parameter(params, 0)
 }
 
-fn decode_ss3(final_byte: u8) -> Option<PromptKey> {
+const fn decode_ss3(final_byte: u8) -> Option<PromptKey> {
     match final_byte {
         b'A' => Some(PromptKey::Up),
         b'B' => Some(PromptKey::Down),

@@ -13,7 +13,11 @@ pub struct ScreenData {
     pub pitch: u64,
 }
 
+// SAFETY: ScreenData is transferred to the terminal that owns its framebuffer;
+// the OS must keep that memory valid for the terminal's lifetime.
 unsafe impl Send for ScreenData {}
+// SAFETY: Terminal access is serialized by TERMINAL's mutex, so framebuffer
+// writes through the shared terminal cannot happen concurrently.
 unsafe impl Sync for ScreenData {}
 
 impl DrawTarget for ScreenData {
@@ -30,6 +34,8 @@ impl DrawTarget for ScreenData {
         let screen_y = u64::try_from(y).unwrap_or(0);
         let offset = (screen_y * self.pitch) + (screen_x * 4);
         let offset_usize = usize::try_from(offset).unwrap_or(0);
+        // SAFETY: The OS-provided framebuffer pointer must be aligned, writable,
+        // and valid for the dimensions and pitch supplied to ScreenData.
         #[allow(clippy::cast_ptr_alignment)]
         unsafe {
             let pixel_ptr = self.ptr.add(offset_usize).cast::<u32>();
